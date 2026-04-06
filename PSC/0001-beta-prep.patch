@@ -1,0 +1,212 @@
+From d78188f1bbf4bb99e361616bc6205e6167c0ca00 Mon Sep 17 00:00:00 2001
+From: PARKS <ian.carroll95@gmail.com>
+Date: Mon, 6 Apr 2026 05:51:46 -0700
+Subject: [PATCH] Beta prep: LICENSE, README, E2E fixes for public release
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Add MIT LICENSE at repo root (PARK Systems Corporation 2026)
+- Add top-level README with quick start and feature overview
+- Fix unused/duplicate imports in terminal and connection-manager modules
+- Replace hardcoded LLM_SERVER_URL with relative URL (nginx-proxied)
+- Fix unsafe `as any` type assertion in completion contribution
+- Add __pycache__ to .gitignore
+- Add nginx/ssl/.gitkeep placeholder for HTTPS cert deployment
+- All extensions, Python server, Docker stack, nginx, and shell scripts
+  pass E2E validation — ready for beta testing
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ LICENSE                                       | 21 +++++++++++++
+ PSC/gemma-theia-ide/.gitignore                |  2 ++
+ .../ai-chat/src/common/ai-protocol.ts         | 10 +++++--
+ .../src/browser/ai-completion-contribution.ts | 11 ++++++-
+ .../browser/ai-terminal-frontend-module.ts    |  9 +++---
+ .../connection-manager-frontend-module.ts     |  6 ++--
+ PSC/gemma-theia-ide/nginx/ssl/.gitkeep        |  1 +
+ README.md                                     | 30 +++++++++++++++++++
+ 8 files changed, 79 insertions(+), 11 deletions(-)
+ create mode 100644 LICENSE
+ create mode 100644 PSC/gemma-theia-ide/nginx/ssl/.gitkeep
+ create mode 100644 README.md
+
+diff --git a/LICENSE b/LICENSE
+new file mode 100644
+index 0000000..dfb9c31
+--- /dev/null
++++ b/LICENSE
+@@ -0,0 +1,21 @@
++MIT License
++
++Copyright (c) 2026 PARK Systems Corporation
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/PSC/gemma-theia-ide/.gitignore b/PSC/gemma-theia-ide/.gitignore
+index 2ea58b2..09aa893 100644
+--- a/PSC/gemma-theia-ide/.gitignore
++++ b/PSC/gemma-theia-ide/.gitignore
+@@ -9,6 +9,8 @@ models/
+ workspace/
+ nginx/ssl/*.pem
+ nginx/ssl/*.key
++__pycache__/
++*.pyc
+ *.log
+ .DS_Store
+ Thumbs.db
+diff --git a/PSC/gemma-theia-ide/extensions/ai-chat/src/common/ai-protocol.ts b/PSC/gemma-theia-ide/extensions/ai-chat/src/common/ai-protocol.ts
+index 8d1b9b3..f6828db 100644
+--- a/PSC/gemma-theia-ide/extensions/ai-chat/src/common/ai-protocol.ts
++++ b/PSC/gemma-theia-ide/extensions/ai-chat/src/common/ai-protocol.ts
+@@ -6,8 +6,14 @@
+ 
+ export namespace GemmaProtocol {
+ 
+-    /** Base URL for the LLM agent server */
+-    export const LLM_SERVER_URL = 'http://localhost:8000';
++    /**
++     * Base URL for the LLM agent server.
++     * In Docker Compose, nginx proxies /api/* to the LLM server, so we use
++     * a relative URL by default. Override via window.__GEMMA_LLM_URL__ for
++     * custom deployments.
++     */
++    export const LLM_SERVER_URL: string =
++        (typeof window !== 'undefined' && (window as any).__GEMMA_LLM_URL__) || '';
+ 
+     /** Agent operation modes */
+     export type AgentMode = 'chat' | 'completion' | 'terminal' | 'refactor';
+diff --git a/PSC/gemma-theia-ide/extensions/ai-completion/src/browser/ai-completion-contribution.ts b/PSC/gemma-theia-ide/extensions/ai-completion/src/browser/ai-completion-contribution.ts
+index 68984fd..f284c87 100644
+--- a/PSC/gemma-theia-ide/extensions/ai-completion/src/browser/ai-completion-contribution.ts
++++ b/PSC/gemma-theia-ide/extensions/ai-completion/src/browser/ai-completion-contribution.ts
+@@ -67,7 +67,16 @@ export class AiCompletionContribution implements CommandContribution, Keybinding
+                             },
+                             newText: completion.text,
+                         };
+-                        editor.document.applyEdits([edit as any]);
++                        // Use Theia's TextDocumentSaveParticipant-compatible edit format
++                        const document = editor.document;
++                        const textEdit = {
++                            range: {
++                                start: { line: cursor.line, character: cursor.character },
++                                end: { line: cursor.line, character: cursor.character },
++                            },
++                            newText: completion.text,
++                        };
++                        document.applyEdits([textEdit as Parameters<typeof document.applyEdits>[0][0]]);
+                     }
+                 }
+             },
+diff --git a/PSC/gemma-theia-ide/extensions/ai-terminal/src/browser/ai-terminal-frontend-module.ts b/PSC/gemma-theia-ide/extensions/ai-terminal/src/browser/ai-terminal-frontend-module.ts
+index 81967c0..b997853 100644
+--- a/PSC/gemma-theia-ide/extensions/ai-terminal/src/browser/ai-terminal-frontend-module.ts
++++ b/PSC/gemma-theia-ide/extensions/ai-terminal/src/browser/ai-terminal-frontend-module.ts
+@@ -2,18 +2,17 @@
+  * Gemma Theia IDE — Terminal Agent Frontend Module
+  */
+ 
+-import { ContainerModule } from '@theia/core/shared/inversify';
++import { ContainerModule, injectable } from '@theia/core/shared/inversify';
+ import {
+     bindViewContribution,
+     FrontendApplicationContribution,
+     WidgetFactory,
++    AbstractViewContribution,
++    FrontendApplication,
+ } from '@theia/core/lib/browser';
+-import { CommandContribution } from '@theia/core/lib/common/command';
+-import { Command, CommandRegistry } from '@theia/core/lib/common/command';
+-import { AbstractViewContribution, FrontendApplication } from '@theia/core/lib/browser';
++import { Command } from '@theia/core/lib/common/command';
+ import { AiTerminalAgent } from './ai-terminal-agent';
+ import { AiTerminalWidget, AI_TERMINAL_WIDGET_ID } from './ai-terminal-widget';
+-import { injectable } from '@theia/core/shared/inversify';
+ 
+ const TOGGLE_TERMINAL_AGENT: Command = {
+     id: 'gemma.toggleTerminalAgent',
+diff --git a/PSC/gemma-theia-ide/extensions/connection-manager/src/browser/connection-manager-frontend-module.ts b/PSC/gemma-theia-ide/extensions/connection-manager/src/browser/connection-manager-frontend-module.ts
+index 844953f..2eeb7b2 100644
+--- a/PSC/gemma-theia-ide/extensions/connection-manager/src/browser/connection-manager-frontend-module.ts
++++ b/PSC/gemma-theia-ide/extensions/connection-manager/src/browser/connection-manager-frontend-module.ts
+@@ -2,15 +2,15 @@
+  * Gemma Theia IDE — Connection Manager Frontend Module
+  */
+ 
+-import { ContainerModule } from '@theia/core/shared/inversify';
++import { ContainerModule, injectable } from '@theia/core/shared/inversify';
+ import {
+     bindViewContribution,
+     FrontendApplicationContribution,
+     WidgetFactory,
++    AbstractViewContribution,
++    FrontendApplication,
+ } from '@theia/core/lib/browser';
+-import { AbstractViewContribution, FrontendApplication } from '@theia/core/lib/browser';
+ import { Command } from '@theia/core/lib/common/command';
+-import { injectable } from '@theia/core/shared/inversify';
+ import { ConnectionManagerService } from './connection-manager-service';
+ import { ConnectionManagerWidget, CONNECTION_MANAGER_WIDGET_ID } from './connection-manager-widget';
+ 
+diff --git a/PSC/gemma-theia-ide/nginx/ssl/.gitkeep b/PSC/gemma-theia-ide/nginx/ssl/.gitkeep
+new file mode 100644
+index 0000000..56c4997
+--- /dev/null
++++ b/PSC/gemma-theia-ide/nginx/ssl/.gitkeep
+@@ -0,0 +1 @@
++# Place cert.pem and key.pem here for HTTPS support
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..d6c86dc
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,30 @@
++# PSC — PARK Systems Corporation Open Source
++
++## Gemma Theia IDE
++
++AI-powered local coding IDE built on [Eclipse Theia](https://theia-ide.org/) with [Google Gemma 4](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/) agent capabilities.
++
++> **Status:** Beta — ready for testing and contributions.
++
++### Quick Start
++
++```bash
++cd PSC/gemma-theia-ide
++./scripts/setup.sh        # Detects GPU, downloads Gemma 4 model
++docker compose up -d      # Launches full stack
++# Open http://localhost:3000
++```
++
++See the full documentation in [`PSC/gemma-theia-ide/README.md`](PSC/gemma-theia-ide/README.md).
++
++### Key Features
++
++- **Gemma 4 AI Agent** — Chat, inline completion, refactoring, and autonomous terminal agent
++- **Eclipse Theia Foundation** — Full VS Code-compatible IDE experience
++- **iPad & Mobile Access** — Connect from any device via local WiFi or Railway cloud tunnel
++- **Local-First** — All AI inference runs on your machine via llama.cpp or vLLM
++- **Docker Compose** — One command to start everything
++
++### License
++
++[MIT](LICENSE)
+-- 
+2.34.1
+

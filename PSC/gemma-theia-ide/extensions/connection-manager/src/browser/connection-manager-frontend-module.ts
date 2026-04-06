@@ -2,15 +2,15 @@
  * Gemma Theia IDE — Connection Manager Frontend Module
  */
 
-import { ContainerModule } from '@theia/core/shared/inversify';
+import { ContainerModule, injectable } from '@theia/core/shared/inversify';
 import {
     bindViewContribution,
     FrontendApplicationContribution,
     WidgetFactory,
+    AbstractViewContribution,
+    FrontendApplication,
 } from '@theia/core/lib/browser';
-import { AbstractViewContribution, FrontendApplication } from '@theia/core/lib/browser';
 import { Command } from '@theia/core/lib/common/command';
-import { injectable } from '@theia/core/shared/inversify';
 import { ConnectionManagerService } from './connection-manager-service';
 import { ConnectionManagerWidget, CONNECTION_MANAGER_WIDGET_ID } from './connection-manager-widget';
 

@@ -67,7 +67,16 @@ export class AiCompletionContribution implements CommandContribution, Keybinding
                             },
                             newText: completion.text,
                         };
-                        editor.document.applyEdits([edit as any]);
+                        // Use Theia's TextDocumentSaveParticipant-compatible edit format
+                        const document = editor.document;
+                        const textEdit = {
+                            range: {
+                                start: { line: cursor.line, character: cursor.character },
+                                end: { line: cursor.line, character: cursor.character },
+                            },
+                            newText: completion.text,
+                        };
+                        document.applyEdits([textEdit as Parameters<typeof document.applyEdits>[0][0]]);
                     }
                 }
             },

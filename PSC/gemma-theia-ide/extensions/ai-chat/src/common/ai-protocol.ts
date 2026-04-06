@@ -6,8 +6,14 @@
 
 export namespace GemmaProtocol {
 
-    /** Base URL for the LLM agent server */
-    export const LLM_SERVER_URL = 'http://localhost:8000';
+    /**
+     * Base URL for the LLM agent server.
+     * In Docker Compose, nginx proxies /api/* to the LLM server, so we use
+     * a relative URL by default. Override via window.__GEMMA_LLM_URL__ for
+     * custom deployments.
+     */
+    export const LLM_SERVER_URL: string =
+        (typeof window !== 'undefined' && (window as any).__GEMMA_LLM_URL__) || '';
 
     /** Agent operation modes */
     export type AgentMode = 'chat' | 'completion' | 'terminal' | 'refactor';
