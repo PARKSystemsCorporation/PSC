@@ -8,10 +8,12 @@ providing a unified OpenAI-compatible API for the Theia IDE extensions.
 import asyncio
 import json
 import os
+import subprocess
 import time
 from contextlib import asynccontextmanager
 from enum import Enum
-from typing import AsyncIterator, Optional
+from pathlib import Path
+from typing import Any, AsyncIterator, Optional
 
 import httpx
 import yaml
@@ -19,6 +21,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
+from model_manager import GEMMA4_MODELS, get_model_path, list_available_models, recommend_model, verify_gpu, download_model
 
 
 # ---------------------------------------------------------------------------
@@ -47,9 +50,19 @@ def load_config() -> dict:
 
 CONFIG = load_config()
 BACKEND = CONFIG.get("backend", "llamacpp")
+PROJECT_DIR = Path(os.environ.get("PROJECT_DIR", "/workspace/project"))
+ENV_FILE = Path(os.environ.get("ENV_FILE", PROJECT_DIR / ".env"))
+COMPOSE_FILE = Path(os.environ.get("COMPOSE_FILE", PROJECT_DIR / "docker-compose.yml"))
 
 # HTTP client for backend communication
 http_client: Optional[httpx.AsyncClient] = None
+download_state: dict[str, Any] = {
+    "status": "idle",
+    "model": None,
+    "error": None,
+    "started_at": None,
+    "finished_at": None,
+}
 
 
 @asynccontextmanager
@@ -132,6 +145,22 @@ class HealthResponse(BaseModel):
     uptime: float
 
 
+class SetupRequest(BaseModel):
+    model: str = Field(..., description="Model key from model manager")
+    hf_token: Optional[str] = Field(None, description="Optional HuggingFace token")
+
+
+class SetupStatusResponse(BaseModel):
+    configured: bool
+    backend: str
+    desired_model: str
+    recommended_model: str
+    backend_ready: bool
+    gpu: dict[str, Any]
+    models: list[dict[str, Any]]
+    download: dict[str, Any]
+
+
 # ---------------------------------------------------------------------------
 # Backend communication
 # ---------------------------------------------------------------------------
@@ -140,15 +169,109 @@ START_TIME = time.time()
 
 
 def _get_backend_url() -> str:
-    if BACKEND == "vllm":
+    if _get_desired_backend() == "vllm":
         return CONFIG["vllm"]["server_url"]
     return CONFIG["llamacpp"]["server_url"]
 
 
+def _read_env_file() -> dict[str, str]:
+    if not ENV_FILE.exists():
+        return {}
+
+    entries: dict[str, str] = {}
+    for raw_line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        entries[key.strip()] = value.strip()
+    return entries
+
+
+def _write_env_updates(updates: dict[str, str]) -> None:
+    lines: list[str] = []
+    existing = ENV_FILE.read_text(encoding="utf-8").splitlines() if ENV_FILE.exists() else []
+    remaining = dict(updates)
+
+    for raw_line in existing:
+        stripped = raw_line.strip()
+        if stripped and not stripped.startswith("#") and "=" in raw_line:
+            key = raw_line.split("=", 1)[0].strip()
+            if key in remaining:
+                lines.append(f"{key}={remaining.pop(key)}")
+                continue
+        lines.append(raw_line)
+
+    for key, value in remaining.items():
+        lines.append(f"{key}={value}")
+
+    ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _get_desired_backend() -> str:
+    return _read_env_file().get("LLM_BACKEND", BACKEND)
+
+
+def _get_desired_model_key() -> str:
+    env_values = _read_env_file()
+    desired_filename = env_values.get("GEMMA_MODEL")
+    if desired_filename:
+        for name, info in GEMMA4_MODELS.items():
+            if info.get("filename") == desired_filename:
+                return name
+    return recommend_model()
+
+
+def _is_model_configured() -> bool:
+    model_key = _get_desired_model_key()
+    return get_model_path(model_key) is not None
+
+
+def _compose_command(args: list[str]) -> subprocess.CompletedProcess[str]:
+    commands = [
+        ["docker", "compose", "-f", str(COMPOSE_FILE), *args],
+        ["docker-compose", "-f", str(COMPOSE_FILE), *args],
+    ]
+
+    for command in commands:
+        try:
+            return subprocess.run(
+                command,
+                cwd=str(PROJECT_DIR),
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+        except FileNotFoundError:
+            continue
+        except subprocess.CalledProcessError as error:
+            raise RuntimeError(error.stderr or error.stdout or str(error)) from error
+
+    raise RuntimeError("Docker Compose is not available inside the LLM service container.")
+
+
+def _restart_llama_service() -> None:
+    _compose_command(["up", "-d", "--force-recreate", "llama-server"])
+
+
+def _build_setup_status(backend_ready: bool) -> SetupStatusResponse:
+    desired_model = _get_desired_model_key()
+    return SetupStatusResponse(
+        configured=_is_model_configured(),
+        backend=_get_desired_backend(),
+        desired_model=desired_model,
+        recommended_model=recommend_model(),
+        backend_ready=backend_ready,
+        gpu=verify_gpu(),
+        models=list_available_models(),
+        download=download_state,
+    )
+
+
 def _get_model_name() -> str:
-    if BACKEND == "vllm":
+    if _get_desired_backend() == "vllm":
         return CONFIG["vllm"].get("model_name", "google/gemma-4-12b-it")
-    return "gemma-4"
+    return _get_desired_model_key()
 
 
 def _build_system_prompt(mode: AgentMode) -> str:
@@ -226,10 +349,67 @@ async def health_check():
 
     return HealthResponse(
         status="ok" if backend_ok else "degraded",
-        backend=BACKEND,
+        backend=_get_desired_backend(),
         model=_get_model_name(),
         uptime=time.time() - START_TIME,
     )
+
+
+@app.get("/api/setup/status", response_model=SetupStatusResponse)
+async def setup_status():
+    backend_ok = False
+    try:
+        resp = await http_client.get(f"{_get_backend_url()}/health", timeout=5.0)
+        backend_ok = resp.status_code == 200
+    except Exception:
+        pass
+    return _build_setup_status(backend_ok)
+
+
+@app.post("/api/setup/download-and-configure")
+async def download_and_configure(request: SetupRequest):
+    if request.model not in GEMMA4_MODELS:
+        raise HTTPException(status_code=404, detail="Unknown model")
+
+    model_info = GEMMA4_MODELS[request.model]
+    if model_info["format"] != "gguf":
+        raise HTTPException(status_code=400, detail="Only GGUF llama.cpp models can be configured in-app right now.")
+
+    if download_state["status"] == "running":
+        raise HTTPException(status_code=409, detail="A model download is already in progress.")
+
+    download_state.update({
+        "status": "running",
+        "model": request.model,
+        "error": None,
+        "started_at": time.time(),
+        "finished_at": None,
+    })
+
+    async def run_setup_job() -> None:
+        try:
+            await asyncio.to_thread(download_model, request.model, request.hf_token)
+            _write_env_updates({
+                "LLM_BACKEND": "llamacpp",
+                "GEMMA_MODEL": model_info["filename"],
+            })
+            await asyncio.to_thread(_restart_llama_service)
+            download_state.update({
+                "status": "completed",
+                "model": request.model,
+                "error": None,
+                "finished_at": time.time(),
+            })
+        except Exception as error:
+            download_state.update({
+                "status": "error",
+                "model": request.model,
+                "error": str(error),
+                "finished_at": time.time(),
+            })
+
+    asyncio.create_task(run_setup_job())
+    return {"accepted": True, "model": request.model}
 
 
 @app.post("/api/chat")

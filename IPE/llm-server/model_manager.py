@@ -78,6 +78,8 @@ def list_available_models() -> list[dict]:
             "size_gb": info["size_gb"],
             "description": info["description"],
             "format": info["format"],
+            "filename": info.get("filename"),
+            "supported_in_app": info["format"] == "gguf",
         })
     return results
 

@@ -15,7 +15,7 @@ npm start
 
 `npm start` bootstraps `IPE/.env`, mounts the full cloned repo into the IDE, and launches the Docker stack from the repo root.
 
-If you're using the default `llamacpp` backend, make sure the configured GGUF model exists in `IPE/models` first.
+If no model is present yet, `npm start` still launches the IDE and shows an in-app setup flow so users can configure and download a model from the UI.
 
 Inside the IDE, the integrated terminal runs with admin-level access in the container and includes common dev tools like `git`, `docker`, `python`, `ripgrep`, and build tooling.
 

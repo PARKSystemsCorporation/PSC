@@ -2,7 +2,7 @@
  * Gemma Theia IDE — Connection Manager Frontend Module
  */
 
-import { ContainerModule, injectable } from '@theia/core/shared/inversify';
+import { ContainerModule, injectable, inject } from '@theia/core/shared/inversify';
 import {
     bindViewContribution,
     FrontendApplicationContribution,
@@ -15,19 +15,22 @@ import { ConnectionManagerService } from './connection-manager-service';
 import { ConnectionManagerWidget, CONNECTION_MANAGER_WIDGET_ID } from './connection-manager-widget';
 
 const TOGGLE_CONNECTIONS: Command = {
-    id: 'gemma.toggleConnections',
-    label: 'Gemma: Toggle Connection Manager',
-    category: 'Connection',
+    id: 'gemma.openSetup',
+    label: 'Gemma: Open Setup',
+    category: 'Gemma',
 };
 
 @injectable()
 class ConnectionManagerContribution extends AbstractViewContribution<ConnectionManagerWidget>
     implements FrontendApplicationContribution {
 
+    @inject(ConnectionManagerService)
+    protected readonly connectionService: ConnectionManagerService;
+
     constructor() {
         super({
             widgetId: CONNECTION_MANAGER_WIDGET_ID,
-            widgetName: 'Connections',
+            widgetName: 'Setup',
             defaultWidgetOptions: {
                 area: 'right',
                 rank: 200,
@@ -37,7 +40,17 @@ class ConnectionManagerContribution extends AbstractViewContribution<ConnectionM
     }
 
     async initializeLayout(app: FrontendApplication): Promise<void> {
-        // Don't auto-open
+        const status = await this.connectionService.loadSetupStatus();
+        if (status && !status.configured) {
+            window.setTimeout(async () => {
+                const shouldOpenSetup = window.confirm(
+                    'No AI model is configured yet. Open setup now?'
+                );
+                if (shouldOpenSetup) {
+                    await this.openView({ activate: true, reveal: true });
+                }
+            }, 1200);
+        }
     }
 }
 

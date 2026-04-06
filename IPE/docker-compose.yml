@@ -70,13 +70,15 @@ services:
     environment:
       - CONFIG_PATH=/app/config.yaml
       - BACKEND=${LLM_BACKEND:-llamacpp}
+      - ENV_FILE=/workspace/project/.env
+      - COMPOSE_FILE=/workspace/project/docker-compose.yml
+      - PROJECT_DIR=/workspace/project
     volumes:
       - ./llm-server/config.yaml:/app/config.yaml:ro
+      - ./:/workspace/project
+      - /var/run/docker.sock:/var/run/docker.sock
     expose:
       - "8000"
-    depends_on:
-      llama-server:
-        condition: service_healthy
     restart: unless-stopped
     networks:
       - gemma-net

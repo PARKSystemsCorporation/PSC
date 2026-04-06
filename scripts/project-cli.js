@@ -165,7 +165,7 @@ function checkModelAvailability(env) {
     return;
   }
 
-  fail(
+  throw new Error(
     [
       "No local GGUF model was found for llama.cpp startup.",
       `Expected ${configuredModelPath}`,
@@ -230,8 +230,13 @@ function waitForIde(port, timeoutMs) {
 
 async function startProject() {
   const env = ensureProjectFiles();
-  checkModelAvailability(env);
   const workspaceMount = getWorkspaceMount(env);
+
+  try {
+    checkModelAvailability(env);
+  } catch (error) {
+    log("No local model is configured yet. Starting the IDE anyway so setup can be completed in the UI.");
+  }
 
   const docker = getDockerCommand();
   const upResult = spawnSync(

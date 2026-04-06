@@ -11,6 +11,37 @@ import { Emitter, Event } from '@theia/core';
 
 export type ConnectionMode = 'local' | 'railway';
 
+export interface ModelOption {
+    name: string;
+    downloaded: boolean;
+    size_gb: number;
+    description: string;
+    format: string;
+    filename?: string;
+    supported_in_app?: boolean;
+}
+
+export interface SetupStatus {
+    configured: boolean;
+    backend: string;
+    desired_model: string;
+    recommended_model: string;
+    backend_ready: boolean;
+    gpu: {
+        nvidia: boolean;
+        vram_gb: number;
+        device_name: string;
+    };
+    models: ModelOption[];
+    download: {
+        status: 'idle' | 'running' | 'completed' | 'error';
+        model?: string | null;
+        error?: string | null;
+        started_at?: number | null;
+        finished_at?: number | null;
+    };
+}
+
 export interface ConnectionInfo {
     mode: ConnectionMode;
     url: string;
@@ -38,12 +69,50 @@ export class ConnectionManagerService {
     private readonly onInfoUpdateEmitter = new Emitter<ConnectionInfo>();
     readonly onInfoUpdate: Event<ConnectionInfo> = this.onInfoUpdateEmitter.event;
 
+    private _setupStatus: SetupStatus | null = null;
+    private readonly onSetupUpdateEmitter = new Emitter<SetupStatus>();
+    readonly onSetupUpdate: Event<SetupStatus> = this.onSetupUpdateEmitter.event;
+
     get mode(): ConnectionMode {
         return this._mode;
     }
 
     get info(): ConnectionInfo {
         return { ...this._info };
+    }
+
+    get setupStatus(): SetupStatus | null {
+        return this._setupStatus ? { ...this._setupStatus } : null;
+    }
+
+    async loadSetupStatus(): Promise<SetupStatus | null> {
+        try {
+            const resp = await fetch('/api/setup/status');
+            if (!resp.ok) {
+                throw new Error(`Setup status failed: ${resp.status}`);
+            }
+            const data = await resp.json() as SetupStatus;
+            this._setupStatus = data;
+            this.onSetupUpdateEmitter.fire(data);
+            return data;
+        } catch {
+            return null;
+        }
+    }
+
+    async downloadAndConfigureModel(model: string): Promise<void> {
+        const resp = await fetch('/api/setup/download-and-configure', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model }),
+        });
+
+        if (!resp.ok) {
+            const errorText = await resp.text();
+            throw new Error(errorText || 'Failed to start model setup');
+        }
+
+        await this.loadSetupStatus();
     }
 
     /**
@@ -171,5 +240,6 @@ export class ConnectionManagerService {
     dispose(): void {
         this.onModeChangeEmitter.dispose();
         this.onInfoUpdateEmitter.dispose();
+        this.onSetupUpdateEmitter.dispose();
     }
 }

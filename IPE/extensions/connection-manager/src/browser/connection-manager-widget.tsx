@@ -8,7 +8,7 @@
 import * as React from 'react';
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import { ReactWidget } from '@theia/core/lib/browser/widgets/react-widget';
-import { ConnectionManagerService, ConnectionMode, ConnectionInfo } from './connection-manager-service';
+import { ConnectionManagerService, ConnectionMode, ConnectionInfo, SetupStatus, ModelOption } from './connection-manager-service';
 
 export const CONNECTION_MANAGER_WIDGET_ID = 'gemma-connection-manager';
 
@@ -16,20 +16,24 @@ export const CONNECTION_MANAGER_WIDGET_ID = 'gemma-connection-manager';
 export class ConnectionManagerWidget extends ReactWidget {
 
     static readonly ID = CONNECTION_MANAGER_WIDGET_ID;
-    static readonly LABEL = 'Connections';
+    static readonly LABEL = 'Setup';
 
     @inject(ConnectionManagerService)
     protected readonly connectionService: ConnectionManagerService;
 
     private connectionInfo: ConnectionInfo | null = null;
     private isStartingTunnel: boolean = false;
+    private activeTab: 'setup' | 'local' | 'railway' = 'setup';
+    private setupStatus: SetupStatus | null = null;
+    private isRefreshingSetup: boolean = false;
+    private setupError: string | null = null;
 
     @postConstruct()
     protected init(): void {
         this.id = ConnectionManagerWidget.ID;
         this.title.label = ConnectionManagerWidget.LABEL;
-        this.title.caption = 'Connection Manager - Local & Railway';
-        this.title.iconClass = 'codicon codicon-plug';
+        this.title.caption = 'Gemma Setup';
+        this.title.iconClass = 'codicon codicon-settings-gear';
         this.title.closable = true;
         this.addClass('gemma-connection-widget');
 
@@ -38,13 +42,40 @@ export class ConnectionManagerWidget extends ReactWidget {
             this.update();
         });
 
-        // Initialize with local mode
+        this.connectionService.onSetupUpdate(status => {
+            this.setupStatus = status;
+            this.update();
+        });
+
+        void this.refreshSetupStatus();
         this.connectionService.switchMode('local');
+        this.update();
+    }
+
+    private async refreshSetupStatus(): Promise<void> {
+        this.isRefreshingSetup = true;
+        this.update();
+        const status = await this.connectionService.loadSetupStatus();
+        if (status) {
+            this.setupStatus = status;
+            this.setupError = null;
+        } else {
+            this.setupError = 'Unable to load AI setup status.';
+        }
+        this.isRefreshingSetup = false;
         this.update();
     }
 
     private handleTabSwitch(mode: ConnectionMode): void {
         this.connectionService.switchMode(mode);
+    }
+
+    private handleMainTabSwitch(tab: 'setup' | 'local' | 'railway'): void {
+        this.activeTab = tab;
+        if (tab === 'local' || tab === 'railway') {
+            this.handleTabSwitch(tab);
+        }
+        this.update();
     }
 
     private async handleStartTunnel(): Promise<void> {
@@ -63,28 +94,46 @@ export class ConnectionManagerWidget extends ReactWidget {
         await this.connectionService.stopRailwayTunnel();
     }
 
+    private async handleModelSetup(model: ModelOption): Promise<void> {
+        this.setupError = null;
+        try {
+            await this.connectionService.downloadAndConfigureModel(model.name);
+        } catch (err: any) {
+            this.setupError = err.message || 'Failed to configure model.';
+        }
+        await this.refreshSetupStatus();
+    }
+
     private copyUrl(url: string): void {
         navigator.clipboard.writeText(url).catch(() => {});
     }
 
     protected render(): React.ReactNode {
         const info = this.connectionInfo || this.connectionService.info;
-        const currentMode = this.connectionService.mode;
+        const setup = this.setupStatus;
+        const supportedModels = setup?.models.filter(model => model.supported_in_app) || [];
 
         return (
             <div className="gemma-conn-container">
                 {/* Tab Bar */}
                 <div className="gemma-conn-tabs">
                     <button
-                        className={`gemma-conn-tab ${currentMode === 'local' ? 'active' : ''}`}
-                        onClick={() => this.handleTabSwitch('local')}
+                        className={`gemma-conn-tab ${this.activeTab === 'setup' ? 'active' : ''}`}
+                        onClick={() => this.handleMainTabSwitch('setup')}
+                    >
+                        <span className="codicon codicon-settings-gear" />
+                        AI Setup
+                    </button>
+                    <button
+                        className={`gemma-conn-tab ${this.activeTab === 'local' ? 'active' : ''}`}
+                        onClick={() => this.handleMainTabSwitch('local')}
                     >
                         <span className="codicon codicon-home" />
                         Local Network
                     </button>
                     <button
-                        className={`gemma-conn-tab ${currentMode === 'railway' ? 'active' : ''}`}
-                        onClick={() => this.handleTabSwitch('railway')}
+                        className={`gemma-conn-tab ${this.activeTab === 'railway' ? 'active' : ''}`}
+                        onClick={() => this.handleMainTabSwitch('railway')}
                     >
                         <span className="codicon codicon-cloud" />
                         Railway Tunnel
@@ -93,21 +142,116 @@ export class ConnectionManagerWidget extends ReactWidget {
 
                 {/* Connection Panel */}
                 <div className="gemma-conn-panel">
-                    {/* Status Bar */}
-                    <div className="gemma-conn-status-bar">
-                        <span className={`gemma-conn-dot gemma-conn-${info.status}`} />
-                        <span className="gemma-conn-status-text">
-                            {info.status === 'connected' ? 'Connected' :
-                             info.status === 'connecting' ? 'Connecting...' :
-                             info.status === 'error' ? 'Error' : 'Disconnected'}
-                        </span>
-                        {info.latency !== undefined && (
-                            <span className="gemma-conn-latency">{info.latency}ms</span>
-                        )}
-                    </div>
+                    {this.activeTab !== 'setup' && (
+                        <div className="gemma-conn-status-bar">
+                            <span className={`gemma-conn-dot gemma-conn-${info.status}`} />
+                            <span className="gemma-conn-status-text">
+                                {info.status === 'connected' ? 'Connected' :
+                                 info.status === 'connecting' ? 'Connecting...' :
+                                 info.status === 'error' ? 'Error' : 'Disconnected'}
+                            </span>
+                            {info.latency !== undefined && (
+                                <span className="gemma-conn-latency">{info.latency}ms</span>
+                            )}
+                        </div>
+                    )}
+
+                    {this.activeTab === 'setup' && (
+                        <div className="gemma-conn-content">
+                            <div className="gemma-setup-header">
+                                <div>
+                                    <h3>AI Setup</h3>
+                                    <p>Bring the IDE up first, then configure AI when you are ready.</p>
+                                </div>
+                                <button
+                                    className="gemma-btn gemma-btn-primary"
+                                    onClick={() => this.refreshSetupStatus()}
+                                    disabled={this.isRefreshingSetup}
+                                >
+                                    {this.isRefreshingSetup ? 'Refreshing...' : 'Refresh Scan'}
+                                </button>
+                            </div>
+
+                            {setup && (
+                                <div className={`gemma-setup-banner ${setup.configured ? 'ready' : 'needs-setup'}`}>
+                                    <strong>
+                                        {setup.configured
+                                            ? (setup.backend_ready ? 'AI is configured and reachable.' : 'Model is configured. AI service is still starting up.')
+                                            : 'No model configured yet.'}
+                                    </strong>
+                                    <span>
+                                        {setup.gpu.nvidia
+                                            ? `Detected ${setup.gpu.device_name} with ${setup.gpu.vram_gb}GB VRAM.`
+                                            : 'No NVIDIA GPU detected. CPU mode is still available with a smaller model.'}
+                                    </span>
+                                    <span>
+                                        Recommended model: <code>{setup.recommended_model}</code>
+                                    </span>
+                                </div>
+                            )}
+
+                            {setup?.download.status === 'running' && (
+                                <div className="gemma-setup-banner info">
+                                    <strong>Downloading and applying {setup.download.model}...</strong>
+                                    <span>The AI service will come online automatically after the download finishes.</span>
+                                </div>
+                            )}
+
+                            {setup?.download.status === 'completed' && (
+                                <div className="gemma-setup-banner ready">
+                                    <strong>{setup.download.model} was downloaded and applied.</strong>
+                                    <span>If the AI status still says disconnected for a minute or two, hit Refresh Scan.</span>
+                                </div>
+                            )}
+
+                            {(this.setupError || setup?.download.error) && (
+                                <div className="gemma-setup-banner error">
+                                    <strong>Setup needs attention.</strong>
+                                    <span>{this.setupError || setup?.download.error}</span>
+                                </div>
+                            )}
+
+                            <div className="gemma-model-grid">
+                                {supportedModels.map(model => {
+                                    const isRecommended = setup?.recommended_model === model.name;
+                                    const isSelected = setup?.desired_model === model.name;
+                                    const isBusy = setup?.download.status === 'running';
+                                    const buttonLabel = model.downloaded
+                                        ? (isSelected ? 'Use This Model Again' : 'Use This Model')
+                                        : 'Download and Use';
+
+                                    return (
+                                        <div key={model.name} className={`gemma-model-card ${isRecommended ? 'recommended' : ''}`}>
+                                            <div className="gemma-model-card-top">
+                                                <div>
+                                                    <h4>{model.name}</h4>
+                                                    <p>{model.description}</p>
+                                                </div>
+                                                <span className="gemma-model-size">{model.size_gb} GB</span>
+                                            </div>
+                                            <div className="gemma-model-meta">
+                                                <span className={`gemma-model-pill ${model.downloaded ? 'downloaded' : 'missing'}`}>
+                                                    {model.downloaded ? 'Downloaded' : 'Not downloaded'}
+                                                </span>
+                                                {isRecommended && <span className="gemma-model-pill recommended">Recommended</span>}
+                                                {isSelected && <span className="gemma-model-pill selected">Current choice</span>}
+                                            </div>
+                                            <button
+                                                className="gemma-btn gemma-btn-primary gemma-model-action"
+                                                onClick={() => this.handleModelSetup(model)}
+                                                disabled={isBusy}
+                                            >
+                                                {buttonLabel}
+                                            </button>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
 
                     {/* Local Mode */}
-                    {currentMode === 'local' && (
+                    {this.activeTab === 'local' && (
                         <div className="gemma-conn-content">
                             <h3>Local Network Access</h3>
                             <p>Connect your iPad or phone on the same WiFi network.</p>
@@ -162,7 +306,7 @@ export class ConnectionManagerWidget extends ReactWidget {
                     )}
 
                     {/* Railway Mode */}
-                    {currentMode === 'railway' && (
+                    {this.activeTab === 'railway' && (
                         <div className="gemma-conn-content">
                             <h3>Railway Cloud Tunnel</h3>
                             <p>Access your IDE from anywhere over the internet via Railway.</p>
@@ -275,6 +419,97 @@ export class ConnectionManagerWidget extends ReactWidget {
                         flex: 1;
                         overflow-y: auto;
                         padding: 16px;
+                    }
+                    .gemma-setup-header {
+                        display: flex;
+                        align-items: flex-start;
+                        justify-content: space-between;
+                        gap: 12px;
+                        margin-bottom: 16px;
+                    }
+                    .gemma-setup-banner {
+                        display: flex;
+                        flex-direction: column;
+                        gap: 6px;
+                        padding: 12px 14px;
+                        border-radius: 8px;
+                        margin-bottom: 16px;
+                        border: 1px solid var(--theia-panel-border);
+                        font-size: 13px;
+                    }
+                    .gemma-setup-banner.ready {
+                        background: rgba(76, 175, 80, 0.12);
+                    }
+                    .gemma-setup-banner.needs-setup,
+                    .gemma-setup-banner.info {
+                        background: rgba(255, 152, 0, 0.12);
+                    }
+                    .gemma-setup-banner.error {
+                        background: rgba(244, 67, 54, 0.12);
+                    }
+                    .gemma-model-grid {
+                        display: grid;
+                        grid-template-columns: 1fr;
+                        gap: 12px;
+                    }
+                    .gemma-model-card {
+                        border: 1px solid var(--theia-panel-border);
+                        border-radius: 10px;
+                        padding: 14px;
+                        background: var(--theia-editor-background);
+                    }
+                    .gemma-model-card.recommended {
+                        box-shadow: inset 0 0 0 1px var(--theia-focusBorder);
+                    }
+                    .gemma-model-card-top {
+                        display: flex;
+                        align-items: flex-start;
+                        justify-content: space-between;
+                        gap: 12px;
+                    }
+                    .gemma-model-card-top h4 {
+                        margin: 0 0 6px 0;
+                        font-size: 14px;
+                    }
+                    .gemma-model-card-top p {
+                        margin: 0;
+                        font-size: 12px;
+                        opacity: 0.8;
+                    }
+                    .gemma-model-size {
+                        font-size: 12px;
+                        opacity: 0.75;
+                        white-space: nowrap;
+                    }
+                    .gemma-model-meta {
+                        display: flex;
+                        gap: 8px;
+                        flex-wrap: wrap;
+                        margin: 12px 0;
+                    }
+                    .gemma-model-pill {
+                        display: inline-flex;
+                        align-items: center;
+                        border-radius: 999px;
+                        padding: 4px 8px;
+                        font-size: 11px;
+                        border: 1px solid var(--theia-panel-border);
+                    }
+                    .gemma-model-pill.downloaded {
+                        background: rgba(76, 175, 80, 0.12);
+                    }
+                    .gemma-model-pill.missing {
+                        background: rgba(255, 152, 0, 0.12);
+                    }
+                    .gemma-model-pill.recommended {
+                        background: rgba(33, 150, 243, 0.12);
+                    }
+                    .gemma-model-pill.selected {
+                        background: rgba(156, 39, 176, 0.12);
+                    }
+                    .gemma-model-action {
+                        width: 100%;
+                        justify-content: center;
                     }
                     .gemma-conn-status-bar {
                         display: flex;
