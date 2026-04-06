@@ -1,0 +1,83 @@
+# Gemma Theia IDE - LLM Server Configuration
+# ============================================
+
+server:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 1
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://0.0.0.0:3000"
+    - "*"
+
+# Backend selection: "llamacpp" or "vllm"
+backend: "llamacpp"
+
+llamacpp:
+  # Path to llama-server binary (inside Docker, mapped via volume)
+  server_url: "http://llama-server:8080"
+  # Model will be downloaded/mounted into container
+  model_path: "/models/gemma-4-12b-it-Q4_K_M.gguf"
+  # Context window size
+  context_size: 8192
+  # GPU layers to offload (-1 = all)
+  gpu_layers: -1
+  # Number of parallel slots
+  parallel: 4
+  # Temperature for generation
+  temperature: 0.7
+  # Top-p sampling
+  top_p: 0.9
+
+vllm:
+  server_url: "http://vllm-server:8000"
+  model_name: "google/gemma-4-12b-it"
+  # Max model length
+  max_model_len: 8192
+  # Tensor parallel size (number of GPUs)
+  tensor_parallel_size: 1
+  # GPU memory utilization
+  gpu_memory_utilization: 0.9
+  # Quantization method
+  quantization: "awq"
+
+# Agent configuration
+agent:
+  # System prompts for different modes
+  chat_system_prompt: |
+    You are Gemma, an expert AI coding assistant integrated into a professional IDE.
+    You help developers write, debug, refactor, and understand code.
+    Always provide clear, concise, and accurate responses.
+    When showing code, use appropriate language tags.
+    If you're unsure about something, say so rather than guessing.
+
+  completion_system_prompt: |
+    You are a code completion engine. Given the code context before and after the cursor,
+    generate the most likely completion. Return ONLY the completion text, no explanation.
+    Be concise and match the existing code style.
+
+  terminal_system_prompt: |
+    You are an autonomous terminal agent. You can execute shell commands to accomplish
+    multi-step tasks. For each step:
+    1. Analyze what needs to be done
+    2. Propose the command(s) to execute
+    3. Explain what each command does
+    4. Wait for execution results before proceeding
+    Always prefer safe, reversible operations. Ask for confirmation before destructive actions.
+
+  # Max tokens for different modes
+  max_tokens:
+    chat: 4096
+    completion: 256
+    terminal: 2048
+
+  # Refactoring capabilities
+  refactor_operations:
+    - rename_symbol
+    - extract_function
+    - extract_variable
+    - inline_variable
+    - move_to_file
+    - convert_to_async
+    - add_types
+    - optimize_imports

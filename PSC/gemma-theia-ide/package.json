@@ -1,0 +1,33 @@
+{
+  "name": "gemma-theia-ide",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI-powered coding IDE built on Eclipse Theia with Gemma 4 agent capabilities and mobile/iPad connectivity",
+  "license": "MIT",
+  "scripts": {
+    "clean": "lerna clean && rimraf node_modules",
+    "build": "lerna run build",
+    "watch": "lerna run watch --parallel",
+    "start": "cd applications/browser && yarn start",
+    "start:debug": "cd applications/browser && yarn start --inspect",
+    "download:plugins": "theia download:plugins --rate-limit=15",
+    "prepare": "lerna run prepare"
+  },
+  "workspaces": [
+    "applications/*",
+    "extensions/*"
+  ],
+  "devDependencies": {
+    "lerna": "^8.1.0",
+    "rimraf": "^5.0.5",
+    "typescript": "~5.4.5"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "yarn": ">=1.22.0"
+  },
+  "theiaPluginsDir": "plugins",
+  "theiaPlugins": {
+    "vscode-builtin-extensions-pack": "https://open-vsx.org/api/eclipse-theia/builtin-extension-pack/1.90.0/file/eclipse-theia.builtin-extension-pack-1.90.0.vsix"
+  }
+}

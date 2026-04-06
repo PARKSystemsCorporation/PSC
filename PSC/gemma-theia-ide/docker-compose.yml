@@ -1,0 +1,157 @@
+###############################################################################
+# Gemma Theia IDE — Docker Compose Stack
+# ========================================
+# Full local AI-powered IDE with:
+#   1. theia        — Eclipse Theia browser IDE with custom extensions
+#   2. llm-server   — FastAPI proxy for Gemma 4 model API
+#   3. llama-server  — llama.cpp server serving Gemma 4 GGUF model
+#   4. nginx        — Reverse proxy with mobile-optimized headers
+#
+# Usage:
+#   docker compose up -d                    # Start everything
+#   docker compose --profile vllm up -d     # Use vLLM instead of llama.cpp
+#   docker compose logs -f                  # Watch logs
+#   docker compose down                     # Stop everything
+###############################################################################
+
+version: "3.9"
+
+services:
+  # ═══════════════════════════════════════════════════════════════════
+  # NGINX — Reverse proxy (entry point)
+  # ═══════════════════════════════════════════════════════════════════
+  nginx:
+    image: nginx:alpine
+    container_name: gemma-nginx
+    ports:
+      - "${IDE_PORT:-3000}:80"
+      - "${IDE_SSL_PORT:-3443}:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - theia
+      - llm-server
+    restart: unless-stopped
+    networks:
+      - gemma-net
+
+  # ═══════════════════════════════════════════════════════════════════
+  # THEIA — Eclipse Theia IDE with custom Gemma extensions
+  # ═══════════════════════════════════════════════════════════════════
+  theia:
+    build:
+      context: .
+      dockerfile: Dockerfile.theia
+    container_name: gemma-theia
+    environment:
+      - NODE_ENV=production
+      - LLM_SERVER_URL=http://llm-server:8000
+    volumes:
+      - workspace:/home/theia/workspace
+      - theia-plugins:/home/theia/plugins
+      - ${HOST_WORKSPACE:-./workspace}:/home/theia/project
+    expose:
+      - "3000"
+    restart: unless-stopped
+    networks:
+      - gemma-net
+
+  # ═══════════════════════════════════════════════════════════════════
+  # LLM SERVER — FastAPI proxy for Gemma 4 model API
+  # ═══════════════════════════════════════════════════════════════════
+  llm-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.llm-server
+    container_name: gemma-llm-server
+    environment:
+      - CONFIG_PATH=/app/config.yaml
+      - BACKEND=${LLM_BACKEND:-llamacpp}
+    volumes:
+      - ./llm-server/config.yaml:/app/config.yaml:ro
+    expose:
+      - "8000"
+    depends_on:
+      llama-server:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - gemma-net
+
+  # ═══════════════════════════════════════════════════════════════════
+  # LLAMA SERVER — llama.cpp serving Gemma 4 GGUF
+  # ═══════════════════════════════════════════════════════════════════
+  llama-server:
+    image: ghcr.io/ggerganov/llama.cpp:server
+    container_name: gemma-llama
+    command: >
+      --model /models/${GEMMA_MODEL:-gemma-4-12b-it-Q4_K_M.gguf}
+      --ctx-size ${CTX_SIZE:-8192}
+      --n-gpu-layers ${GPU_LAYERS:--1}
+      --parallel ${PARALLEL_SLOTS:-4}
+      --host 0.0.0.0
+      --port 8080
+      --embedding
+    volumes:
+      - ${MODELS_DIR:-./models}:/models:ro
+    expose:
+      - "8080"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    restart: unless-stopped
+    networks:
+      - gemma-net
+
+  # ═══════════════════════════════════════════════════════════════════
+  # VLLM SERVER — Alternative backend (activate with --profile vllm)
+  # ═══════════════════════════════════════════════════════════════════
+  vllm-server:
+    image: vllm/vllm-openai:latest
+    container_name: gemma-vllm
+    profiles:
+      - vllm
+    command: >
+      --model ${VLLM_MODEL:-google/gemma-4-12b-it}
+      --max-model-len ${CTX_SIZE:-8192}
+      --tensor-parallel-size ${TENSOR_PARALLEL:-1}
+      --gpu-memory-utilization ${GPU_MEM_UTIL:-0.9}
+      --host 0.0.0.0
+      --port 8000
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+      - VLLM_ATTENTION_BACKEND=FLASHINFER
+    volumes:
+      - model-cache:/root/.cache/huggingface
+    expose:
+      - "8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+    networks:
+      - gemma-net
+
+volumes:
+  workspace:
+  theia-plugins:
+  model-cache:
+
+networks:
+  gemma-net:
+    driver: bridge

@@ -1,0 +1,14 @@
+node_modules/
+lib/
+dist/
+.theia/
+plugins/
+*.vsix
+.env
+models/
+workspace/
+nginx/ssl/*.pem
+nginx/ssl/*.key
+*.log
+.DS_Store
+Thumbs.db

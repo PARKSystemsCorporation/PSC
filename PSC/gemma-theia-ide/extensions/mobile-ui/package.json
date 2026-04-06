@@ -1,0 +1,27 @@
+{
+  "name": "gemma-mobile-ui",
+  "version": "1.0.0",
+  "description": "Mobile and iPad responsive UI optimizations — touch-friendly controls, PWA manifest, adaptive layout",
+  "keywords": ["theia-extension"],
+  "license": "MIT",
+  "files": ["lib", "src"],
+  "main": "lib/browser/mobile-ui-frontend-module",
+  "dependencies": {
+    "@theia/core": "1.54.0"
+  },
+  "devDependencies": {
+    "typescript": "~5.4.5",
+    "rimraf": "^5.0.5"
+  },
+  "scripts": {
+    "clean": "rimraf lib",
+    "build": "tsc",
+    "watch": "tsc -w",
+    "prepare": "yarn build"
+  },
+  "theiaExtensions": [
+    {
+      "frontend": "lib/browser/mobile-ui-frontend-module"
+    }
+  ]
+}

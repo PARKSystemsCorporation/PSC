@@ -1,0 +1,263 @@
+/**
+ * Gemma Theia IDE — Mobile & iPad Responsive Styles
+ * =====================================================
+ * Touch-friendly optimizations, adaptive layout, and PWA support.
+ */
+
+/* ============================================
+   PWA: Prevent pull-to-refresh and overscroll
+   ============================================ */
+html, body {
+    overscroll-behavior: none;
+    -webkit-overflow-scrolling: touch;
+}
+
+/* ============================================
+   Touch-Friendly: Larger hit targets
+   ============================================ */
+@media (pointer: coarse) {
+    /* Increase minimum tap target size */
+    .theia-TreeNode,
+    .theia-TreeNodeContent {
+        min-height: 36px !important;
+        padding: 4px 8px !important;
+    }
+
+    /* Larger tab bar items */
+    .p-TabBar-tab {
+        min-height: 40px !important;
+        padding: 0 12px !important;
+    }
+
+    /* Bigger buttons */
+    button, .theia-button {
+        min-height: 36px !important;
+        min-width: 36px !important;
+    }
+
+    /* Larger scrollbars for touch */
+    ::-webkit-scrollbar {
+        width: 10px !important;
+        height: 10px !important;
+    }
+
+    ::-webkit-scrollbar-thumb {
+        border-radius: 5px;
+        min-height: 40px;
+    }
+
+    /* Touch-friendly menu items */
+    .p-Menu-item {
+        min-height: 40px !important;
+        padding: 8px 16px !important;
+    }
+
+    /* Larger editor gutter for touch */
+    .monaco-editor .margin {
+        min-width: 48px !important;
+    }
+}
+
+/* ============================================
+   iPad (768px - 1024px)
+   ============================================ */
+@media screen and (min-width: 768px) and (max-width: 1024px) {
+    /* Side panels: slightly narrower default */
+    .theia-left-side-panel {
+        width: 220px !important;
+    }
+
+    .theia-right-side-panel {
+        width: 280px !important;
+    }
+
+    /* Split view: stack panels instead of side-by-side on portrait */
+    @media (orientation: portrait) {
+        .theia-left-side-panel {
+            width: 100% !important;
+            max-height: 40vh;
+        }
+
+        #theia-main-content-panel {
+            flex-direction: column !important;
+        }
+    }
+
+    /* Tab bar: scrollable with larger tabs */
+    .p-TabBar {
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .p-TabBar-content {
+        flex-wrap: nowrap !important;
+    }
+
+    /* Gemma AI chat: wider input */
+    .gemma-chat-input {
+        font-size: 16px !important; /* Prevents iOS zoom on focus */
+    }
+}
+
+/* ============================================
+   Mobile (< 768px)
+   ============================================ */
+@media screen and (max-width: 767px) {
+    /* Hide side panels by default on mobile */
+    .theia-left-side-panel,
+    .theia-right-side-panel {
+        position: fixed !important;
+        z-index: 1000;
+        top: 0;
+        bottom: 0;
+        width: 85vw !important;
+        max-width: 320px;
+        transition: transform 0.3s ease;
+    }
+
+    .theia-left-side-panel {
+        left: 0;
+        transform: translateX(-100%);
+    }
+
+    .theia-right-side-panel {
+        right: 0;
+        transform: translateX(100%);
+    }
+
+    .theia-left-side-panel.visible {
+        transform: translateX(0);
+    }
+
+    .theia-right-side-panel.visible {
+        transform: translateX(0);
+    }
+
+    /* Overlay when panel is open */
+    .gemma-mobile-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 999;
+        display: none;
+    }
+
+    .gemma-mobile-overlay.active {
+        display: block;
+    }
+
+    /* Bottom navigation bar for mobile */
+    .gemma-mobile-navbar {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 56px;
+        background: var(--theia-activityBar-background);
+        display: flex;
+        align-items: center;
+        justify-content: space-around;
+        z-index: 1001;
+        border-top: 1px solid var(--theia-panel-border);
+        padding-bottom: env(safe-area-inset-bottom, 0);
+    }
+
+    .gemma-mobile-navbar-item {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        padding: 6px 12px;
+        background: none;
+        border: none;
+        color: var(--theia-activityBar-foreground);
+        font-size: 10px;
+        cursor: pointer;
+        opacity: 0.7;
+    }
+
+    .gemma-mobile-navbar-item.active {
+        opacity: 1;
+        color: var(--theia-activityBar-activeBorder);
+    }
+
+    .gemma-mobile-navbar-item .codicon {
+        font-size: 20px;
+    }
+
+    /* Make room for bottom navbar */
+    #theia-app-shell {
+        padding-bottom: calc(56px + env(safe-area-inset-bottom, 0)) !important;
+    }
+
+    /* Full-width editor on mobile */
+    .monaco-editor {
+        width: 100% !important;
+    }
+
+    /* Stack bottom panel full-width */
+    .theia-bottom-panel {
+        max-height: 50vh !important;
+    }
+
+    /* Prevent iOS zoom on input focus */
+    input, textarea, select {
+        font-size: 16px !important;
+    }
+
+    /* Hide activity bar on mobile (replaced by bottom nav) */
+    .theia-app-left .p-TabBar.theia-app-sides {
+        display: none !important;
+    }
+
+    /* Gemma chat: full height on mobile */
+    .gemma-chat-container {
+        height: calc(100vh - 56px - env(safe-area-inset-bottom, 0)) !important;
+    }
+}
+
+/* ============================================
+   PWA: Safe areas for notched devices
+   ============================================ */
+@supports (padding: env(safe-area-inset-top)) {
+    .theia-app-shell {
+        padding-top: env(safe-area-inset-top);
+        padding-left: env(safe-area-inset-left);
+        padding-right: env(safe-area-inset-right);
+    }
+}
+
+/* ============================================
+   Dark mode enhancements for mobile
+   ============================================ */
+@media (prefers-color-scheme: dark) {
+    .gemma-mobile-navbar {
+        background: #1e1e1e;
+        border-top-color: #333;
+    }
+}
+
+/* ============================================
+   Animations: Reduced motion support
+   ============================================ */
+@media (prefers-reduced-motion: reduce) {
+    * {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
+/* ============================================
+   Print: Hide non-essential UI
+   ============================================ */
+@media print {
+    .gemma-mobile-navbar,
+    .theia-left-side-panel,
+    .theia-right-side-panel,
+    .theia-bottom-panel {
+        display: none !important;
+    }
+}

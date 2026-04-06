@@ -1,0 +1,92 @@
+###############################################################################
+# Gemma Theia IDE — Theia Application Dockerfile
+# =================================================
+# Multi-stage build:
+#   Stage 1: Build the Theia app with custom extensions
+#   Stage 2: Production runtime
+###############################################################################
+
+# ── Stage 1: Build ──────────────────────────────────────────────────
+FROM node:20-bookworm AS builder
+
+# System dependencies for native module compilation
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    libx11-dev \
+    libxkbfile-dev \
+    libsecret-1-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy package files first for layer caching
+COPY package.json lerna.json tsconfig.json yarn.lock* ./
+COPY applications/ applications/
+COPY extensions/ extensions/
+
+# Install dependencies
+RUN yarn install --frozen-lockfile || yarn install
+
+# Build all extensions and the browser application
+RUN yarn build
+
+# Download VS Code plugins
+RUN mkdir -p plugins && yarn download:plugins || true
+
+
+# ── Stage 2: Production Runtime ─────────────────────────────────────
+FROM node:20-bookworm-slim AS runtime
+
+# Runtime dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    openssh-client \
+    libsecret-1-0 \
+    bash \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -r theia && useradd -r -g theia -m -d /home/theia -s /bin/bash theia
+
+WORKDIR /home/theia
+
+# Copy built application from builder
+COPY --from=builder /app /home/theia/app
+
+# Copy PWA assets
+COPY extensions/mobile-ui/src/browser/mobile-styles.css /home/theia/app/applications/browser/lib/mobile-styles.css
+
+# Create workspace directory
+RUN mkdir -p /home/theia/workspace /home/theia/project /home/theia/plugins \
+    && chown -R theia:theia /home/theia
+
+# PWA manifest
+RUN echo '{ \
+  "name": "Gemma AI IDE", \
+  "short_name": "Gemma IDE", \
+  "description": "AI-powered coding IDE with Gemma 4", \
+  "start_url": "/", \
+  "display": "standalone", \
+  "background_color": "#1e1e1e", \
+  "theme_color": "#1e1e1e", \
+  "orientation": "any", \
+  "icons": [{ "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" }] \
+}' > /home/theia/app/applications/browser/lib/manifest.json
+
+USER theia
+
+WORKDIR /home/theia/app
+
+EXPOSE 3000
+
+ENV NODE_ENV=production \
+    SHELL=/bin/bash \
+    THEIA_DEFAULT_PLUGINS=local-dir:/home/theia/plugins
+
+CMD ["node", "applications/browser/lib/backend/main.js", \
+     "--hostname=0.0.0.0", "--port=3000", \
+     "/home/theia/project"]

@@ -1,0 +1,29 @@
+{
+  "name": "gemma-connection-manager",
+  "version": "1.0.0",
+  "description": "Connection mode switcher — Local and Railway tunnel tabs for mobile/iPad access",
+  "keywords": ["theia-extension"],
+  "license": "MIT",
+  "files": ["lib", "src"],
+  "main": "lib/browser/connection-manager-frontend-module",
+  "dependencies": {
+    "@theia/core": "1.54.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "typescript": "~5.4.5",
+    "rimraf": "^5.0.5"
+  },
+  "scripts": {
+    "clean": "rimraf lib",
+    "build": "tsc",
+    "watch": "tsc -w",
+    "prepare": "yarn build"
+  },
+  "theiaExtensions": [
+    {
+      "frontend": "lib/browser/connection-manager-frontend-module"
+    }
+  ]
+}

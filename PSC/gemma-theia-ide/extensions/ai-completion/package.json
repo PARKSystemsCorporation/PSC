@@ -1,0 +1,30 @@
+{
+  "name": "gemma-ai-completion",
+  "version": "1.0.0",
+  "description": "Gemma 4 inline code completion — ghost text suggestions powered by local AI",
+  "keywords": ["theia-extension"],
+  "license": "MIT",
+  "files": ["lib", "src"],
+  "main": "lib/browser/ai-completion-frontend-module",
+  "dependencies": {
+    "@theia/core": "1.54.0",
+    "@theia/editor": "1.54.0",
+    "@theia/monaco": "1.54.0",
+    "gemma-ai-chat": "1.0.0"
+  },
+  "devDependencies": {
+    "typescript": "~5.4.5",
+    "rimraf": "^5.0.5"
+  },
+  "scripts": {
+    "clean": "rimraf lib",
+    "build": "tsc",
+    "watch": "tsc -w",
+    "prepare": "yarn build"
+  },
+  "theiaExtensions": [
+    {
+      "frontend": "lib/browser/ai-completion-frontend-module"
+    }
+  ]
+}
