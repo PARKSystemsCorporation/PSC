@@ -1,0 +1,14 @@
+{
+  "name": "psc",
+  "private": true,
+  "description": "Root launcher for the Gemma Theia IDE workspace",
+  "scripts": {
+    "setup": "node scripts/project-cli.js setup",
+    "start": "node scripts/project-cli.js start",
+    "stop": "node scripts/project-cli.js stop",
+    "logs": "node scripts/project-cli.js logs"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

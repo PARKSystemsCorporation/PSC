@@ -43,14 +43,27 @@ FROM node:20-bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y \
     git \
     curl \
+    docker.io \
     openssh-client \
     libsecret-1-0 \
     bash \
     procps \
+    sudo \
+    less \
+    nano \
+    vim-tiny \
+    jq \
+    ripgrep \
+    python3 \
+    python3-pip \
+    make \
+    g++ \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
-RUN groupadd -r theia && useradd -r -g theia -m -d /home/theia -s /bin/bash theia
+RUN groupadd -r theia && useradd -r -g theia -m -d /home/theia -s /bin/bash theia \
+    && echo 'theia ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/theia \
+    && chmod 0440 /etc/sudoers.d/theia
 
 WORKDIR /home/theia
 
@@ -77,13 +90,12 @@ RUN echo '{ \
   "icons": [{ "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" }] \
 }' > /home/theia/app/applications/browser/lib/manifest.json
 
-USER theia
-
 WORKDIR /home/theia/app
 
 EXPOSE 3000
 
 ENV NODE_ENV=production \
+    HOME=/home/theia \
     SHELL=/bin/bash \
     THEIA_DEFAULT_PLUGINS=local-dir:/home/theia/plugins
 

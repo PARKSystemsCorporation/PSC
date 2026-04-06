@@ -9,13 +9,15 @@ AI-powered local coding IDE built on [Eclipse Theia](https://theia-ide.org/) wit
 ### Quick Start
 
 ```bash
-cd PSC/gemma-theia-ide
-./scripts/setup.sh        # Detects GPU, downloads Gemma 4 model
-docker compose up -d      # Launches full stack
-# Open http://localhost:3000
+cd PSC
+npm start
 ```
 
-See the full documentation in [`PSC/gemma-theia-ide/README.md`](PSC/gemma-theia-ide/README.md).
+`npm start` bootstraps `IPE/.env`, mounts the full cloned repo into the IDE, and launches the Docker stack from the repo root.
+
+If you're using the default `llamacpp` backend, make sure the configured GGUF model exists in `IPE/models` first.
+
+Inside the IDE, the integrated terminal runs with admin-level access in the container and includes common dev tools like `git`, `docker`, `python`, `ripgrep`, and build tooling.
 
 ### Key Features
 

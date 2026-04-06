@@ -44,13 +44,15 @@ services:
       context: .
       dockerfile: Dockerfile.theia
     container_name: gemma-theia
+    user: "0:0"
     environment:
       - NODE_ENV=production
       - LLM_SERVER_URL=http://llm-server:8000
     volumes:
       - workspace:/home/theia/workspace
       - theia-plugins:/home/theia/plugins
-      - ${HOST_WORKSPACE:-./workspace}:/home/theia/project
+      - ${HOST_WORKSPACE:-..}:/home/theia/project
+      - /var/run/docker.sock:/var/run/docker.sock
     expose:
       - "3000"
     restart: unless-stopped
