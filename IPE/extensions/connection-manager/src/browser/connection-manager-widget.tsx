@@ -255,6 +255,94 @@ export class ConnectionManagerWidget extends ReactWidget {
                             )}
 
                             <div className="gemma-token-panel">
+                                <h4>PersonaPlex Voice Companion</h4>
+                                <p>
+                                    Optional speech-to-speech voice UI from NVIDIA. It runs locally on a separate port and does not replace
+                                    the GGUF coding model setup in this IDE.
+                                </p>
+                                <div className="gemma-personaplex-status">
+                                    <span className={`gemma-model-pill ${setup?.personaplex.enabled ? 'recommended' : 'missing'}`}>
+                                        {setup?.personaplex.enabled ? 'Enabled' : 'Disabled'}
+                                    </span>
+                                    {setup?.personaplex.enabled && (
+                                        <span className={`gemma-model-pill ${setup.personaplex.healthy ? 'downloaded' : 'missing'}`}>
+                                            {setup.personaplex.healthy ? 'Running' : 'Starting or unavailable'}
+                                        </span>
+                                    )}
+                                    {setup?.personaplex.enabled && setup.personaplex.hf_token_configured && (
+                                        <span className="gemma-model-pill downloaded">HF token detected</span>
+                                    )}
+                                </div>
+                                {setup?.personaplex && (
+                                    <>
+                                        <div className="gemma-conn-url-row" style={{ marginBottom: '10px' }}>
+                                            <code className="gemma-conn-url">{setup.personaplex.url}</code>
+                                            <button
+                                                className="gemma-conn-copy-btn"
+                                                onClick={() => this.copyUrl(setup.personaplex.url)}
+                                                title="Copy PersonaPlex URL"
+                                            >
+                                                <span className="codicon codicon-copy" />
+                                            </button>
+                                            <button
+                                                className="gemma-btn gemma-btn-secondary"
+                                                onClick={() => window.open(setup.personaplex.url, '_blank', 'noopener,noreferrer')}
+                                                disabled={!setup.personaplex.enabled}
+                                            >
+                                                Open Voice UI
+                                            </button>
+                                        </div>
+                                        <p style={{ marginBottom: '8px' }}>{setup.personaplex.notes}</p>
+                                        {!setup.personaplex.enabled && (
+                                            <div className="gemma-setup-banner info" style={{ marginBottom: 0 }}>
+                                                <strong>To enable PersonaPlex</strong>
+                                                <span>Set <code>PERSONAPLEX_ENABLED=true</code> in <code>IPE/.env</code> and restart <code>npm start</code>.</span>
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+                            </div>
+
+                            <div className="gemma-token-panel">
+                                <h4>MemPalace Memory</h4>
+                                <p>
+                                    Optional local memory for project context and past decisions. When enabled, the AI server injects
+                                    MemPalace wake-up context automatically and can search memory for relevant prompts.
+                                </p>
+                                <div className="gemma-personaplex-status">
+                                    <span className={`gemma-model-pill ${setup?.memory.enabled ? 'recommended' : 'missing'}`}>
+                                        {setup?.memory.enabled ? 'Enabled' : 'Disabled'}
+                                    </span>
+                                    {setup?.memory.enabled && (
+                                        <span className={`gemma-model-pill ${setup.memory.available ? 'downloaded' : 'missing'}`}>
+                                            {setup.memory.available ? 'Installed in server' : 'Server rebuild needed'}
+                                        </span>
+                                    )}
+                                    {setup?.memory.enabled && setup.memory.configured && (
+                                        <span className="gemma-model-pill downloaded">Indexed and ready</span>
+                                    )}
+                                    {setup?.memory.enabled && setup.memory.auto_search && (
+                                        <span className="gemma-model-pill recommended">Auto search on</span>
+                                    )}
+                                </div>
+                                {setup?.memory && (
+                                    <>
+                                        <div className="gemma-memory-meta">
+                                            <div><strong>Wing:</strong> <code>{setup.memory.wing}</code></div>
+                                            <div><strong>Palace:</strong> <code>{setup.memory.palace_path}</code></div>
+                                        </div>
+                                        <p style={{ marginBottom: '8px' }}>{setup.memory.notes}</p>
+                                        {!setup.memory.enabled && (
+                                            <div className="gemma-setup-banner info" style={{ marginBottom: 0 }}>
+                                                <strong>To enable MemPalace</strong>
+                                                <span>Set <code>MEMPALACE_ENABLED=true</code> in <code>IPE/.env</code> and restart <code>npm start</code>.</span>
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+                            </div>
+
+                            <div className="gemma-token-panel">
                                 <h4>Hugging Face Access</h4>
                                 <p>
                                     Only needed if you want the app to download a model for you. If you already have a GGUF file,
@@ -642,6 +730,19 @@ export class ConnectionManagerWidget extends ReactWidget {
                         background: var(--theia-input-background);
                         color: var(--theia-input-foreground);
                         font: inherit;
+                    }
+                    .gemma-personaplex-status {
+                        display: flex;
+                        gap: 8px;
+                        flex-wrap: wrap;
+                        margin-bottom: 10px;
+                    }
+                    .gemma-memory-meta {
+                        display: flex;
+                        flex-direction: column;
+                        gap: 6px;
+                        margin-bottom: 10px;
+                        font-size: 12px;
                     }
                     .gemma-drop-zone {
                         display: flex;

@@ -47,6 +47,24 @@ export interface SetupStatus {
         started_at?: number | null;
         finished_at?: number | null;
     };
+    personaplex: {
+        enabled: boolean;
+        healthy: boolean;
+        port: number;
+        url: string;
+        profile: string;
+        hf_token_configured: boolean;
+        notes: string;
+    };
+    memory: {
+        enabled: boolean;
+        available: boolean;
+        configured: boolean;
+        palace_path: string;
+        wing: string;
+        auto_search: boolean;
+        notes: string;
+    };
 }
 
 export interface ConnectionInfo {

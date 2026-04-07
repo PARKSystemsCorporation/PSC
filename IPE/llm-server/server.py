@@ -8,6 +8,7 @@ providing a unified OpenAI-compatible API for the Theia IDE extensions.
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 import time
 from contextlib import asynccontextmanager
@@ -166,6 +167,8 @@ class SetupStatusResponse(BaseModel):
     models: list[dict[str, Any]]
     local_models: list[dict[str, Any]]
     download: dict[str, Any]
+    personaplex: dict[str, Any]
+    memory: dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
@@ -219,11 +222,98 @@ def _get_desired_backend() -> str:
     return _read_env_file().get("LLM_BACKEND", BACKEND)
 
 
+def _is_truthy(value: Optional[str]) -> bool:
+    return bool(value and value.strip().lower() in {"1", "true", "yes", "on"})
+
+
 def _get_hf_token(provided_token: Optional[str] = None) -> Optional[str]:
     if provided_token and provided_token.strip():
         return provided_token.strip()
     env_token = _read_env_file().get("HF_TOKEN") or os.environ.get("HF_TOKEN")
     return env_token.strip() if env_token else None
+
+
+def _resolve_project_path(value: str, default: str) -> Path:
+    raw_value = value.strip() if value else default
+    target = Path(raw_value)
+    return target if target.is_absolute() else (PROJECT_DIR / target).resolve()
+
+
+def _is_mempalace_enabled() -> bool:
+    return _is_truthy(_read_env_file().get("MEMPALACE_ENABLED", "false"))
+
+
+def _get_mempalace_palace_path() -> Path:
+    env_values = _read_env_file()
+    return _resolve_project_path(env_values.get("MEMPALACE_PALACE_PATH", "./.mempalace/palace"), "./.mempalace/palace")
+
+
+def _get_mempalace_wing() -> str:
+    wing = _read_env_file().get("MEMPALACE_WING", "").strip()
+    return wing or PROJECT_DIR.name.lower()
+
+
+def _is_mempalace_auto_search_enabled() -> bool:
+    return _is_truthy(_read_env_file().get("MEMPALACE_AUTO_SEARCH", "true"))
+
+
+def _get_mempalace_command() -> Optional[list[str]]:
+    executable = shutil.which("mempalace")
+    if executable:
+        return [executable]
+    return None
+
+
+def _run_mempalace_command(args: list[str]) -> subprocess.CompletedProcess[str]:
+    command = _get_mempalace_command()
+    if not command:
+        raise RuntimeError("MemPalace is not installed in the llm-server container yet. Rebuild with `npm start` or `docker compose build llm-server`.")
+
+    env = {
+        **os.environ,
+        "HOME": str(PROJECT_DIR),
+    }
+    return subprocess.run(
+        [*command, *args],
+        cwd=str(PROJECT_DIR),
+        text=True,
+        capture_output=True,
+        check=True,
+        env=env,
+    )
+
+
+def _is_mempalace_configured() -> bool:
+    palace_path = _get_mempalace_palace_path()
+    return palace_path.exists() and any(palace_path.iterdir())
+
+
+def _get_mempalace_status() -> dict[str, Any]:
+    enabled = _is_mempalace_enabled()
+    palace_path = _get_mempalace_palace_path()
+    configured = _is_mempalace_configured()
+    command = _get_mempalace_command()
+    wing = _get_mempalace_wing()
+    auto_search = _is_mempalace_auto_search_enabled()
+    notes = (
+        "Run `docker compose -f IPE/docker-compose.yml exec llm-server mempalace init /workspace/project --yes` "
+        "then `docker compose -f IPE/docker-compose.yml exec llm-server mempalace mine /workspace/project --wing "
+        f"{wing}` to build local memory."
+    )
+    if not enabled:
+        notes = "Set MEMPALACE_ENABLED=true in IPE/.env, then restart npm start to enable local memory."
+    elif configured:
+        notes = "MemPalace wake-up context is injected automatically, and recent prompts can trigger local memory search."
+
+    return {
+        "enabled": enabled,
+        "available": bool(command),
+        "configured": configured,
+        "palace_path": str(palace_path),
+        "wing": wing,
+        "auto_search": auto_search,
+        "notes": notes,
+    }
 
 
 def _get_desired_model_key() -> str:
@@ -275,7 +365,27 @@ def _restart_llama_service() -> None:
     _compose_command(["up", "-d", "--force-recreate", "llama-server"])
 
 
-def _build_setup_status(backend_ready: bool) -> SetupStatusResponse:
+def _get_personaplex_status(healthy: bool) -> dict[str, Any]:
+    env_values = _read_env_file()
+    enabled = _is_truthy(env_values.get("PERSONAPLEX_ENABLED", "false"))
+    port = int(env_values.get("PERSONAPLEX_PORT", "8998") or "8998")
+    hf_token_present = bool(_get_hf_token())
+    return {
+        "enabled": enabled,
+        "healthy": healthy if enabled else False,
+        "port": port,
+        "url": f"https://localhost:{port}",
+        "profile": "voice",
+        "hf_token_configured": hf_token_present,
+        "notes": (
+            "PersonaPlex requires an accepted Hugging Face license for nvidia/personaplex-7b-v1."
+            if enabled
+            else "Set PERSONAPLEX_ENABLED=true in IPE/.env, then restart npm start to launch PersonaPlex."
+        ),
+    }
+
+
+def _build_setup_status(backend_ready: bool, personaplex_ready: bool) -> SetupStatusResponse:
     desired_model = _get_desired_model_key()
     return SetupStatusResponse(
         configured=_is_model_configured() or _is_local_model_configured(),
@@ -289,6 +399,8 @@ def _build_setup_status(backend_ready: bool) -> SetupStatusResponse:
         models=list_available_models(),
         local_models=list_local_gguf_models(),
         download=download_state,
+        personaplex=_get_personaplex_status(personaplex_ready),
+        memory=_get_mempalace_status(),
     )
 
 
@@ -298,7 +410,56 @@ def _get_model_name() -> str:
     return _get_desired_model_key()
 
 
-def _build_system_prompt(mode: AgentMode) -> str:
+def _latest_user_message(messages: list[dict[str, Any]]) -> str:
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            return str(message.get("content", "")).strip()
+    return ""
+
+
+def _get_memory_context(query: Optional[str] = None) -> str:
+    if not _is_mempalace_enabled():
+        return ""
+
+    sections: list[str] = []
+    palace_path = _get_mempalace_palace_path()
+    wing = _get_mempalace_wing()
+    palace_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        wakeup = _run_mempalace_command([
+            "--palace",
+            str(palace_path),
+            "wake-up",
+            "--wing",
+            wing,
+        ]).stdout.strip()
+        if wakeup:
+            sections.append(f"Wake-up memory:\n{wakeup}")
+    except Exception:
+        return ""
+
+    if query and _is_mempalace_auto_search_enabled() and len(query) >= 12:
+        try:
+            results = _run_mempalace_command([
+                "--palace",
+                str(palace_path),
+                "search",
+                query,
+                "--wing",
+                wing,
+                "--results",
+                "3",
+            ]).stdout.strip()
+            if results:
+                sections.append(f"Relevant memory search:\n{results}")
+        except Exception:
+            pass
+
+    return "\n\n".join(section for section in sections if section)
+
+
+def _build_system_prompt(mode: AgentMode, memory_context: str = "") -> str:
     agent_cfg = CONFIG.get("agent", {})
     prompts = {
         AgentMode.CHAT: agent_cfg.get("chat_system_prompt", "You are a coding assistant."),
@@ -306,7 +467,14 @@ def _build_system_prompt(mode: AgentMode) -> str:
         AgentMode.TERMINAL: agent_cfg.get("terminal_system_prompt", "You are a terminal agent."),
         AgentMode.REFACTOR: "You are an expert code refactoring assistant. Return ONLY the refactored code.",
     }
-    return prompts.get(mode, prompts[AgentMode.CHAT])
+    prompt = prompts.get(mode, prompts[AgentMode.CHAT])
+    if memory_context:
+        prompt = (
+            f"{prompt}\n\n"
+            "Local memory context from MemPalace is included below. Use it when relevant, prefer it over guesses, and say when memory is incomplete.\n\n"
+            f"{memory_context}"
+        )
+    return prompt
 
 
 def _get_max_tokens(mode: AgentMode, override: Optional[int] = None) -> int:
@@ -382,12 +550,19 @@ async def health_check():
 @app.get("/api/setup/status", response_model=SetupStatusResponse)
 async def setup_status():
     backend_ok = False
+    personaplex_ok = False
     try:
         resp = await http_client.get(f"{_get_backend_url()}/health", timeout=5.0)
         backend_ok = resp.status_code == 200
     except Exception:
         pass
-    return _build_setup_status(backend_ok)
+    if _is_truthy(_read_env_file().get("PERSONAPLEX_ENABLED", "false")):
+        try:
+            resp = await http_client.get("https://personaplex:8998", timeout=5.0, verify=False)
+            personaplex_ok = resp.status_code == 200
+        except Exception:
+            pass
+    return _build_setup_status(backend_ok, personaplex_ok)
 
 
 @app.post("/api/setup/download-and-configure")
@@ -493,9 +668,11 @@ async def upload_local_model(file: UploadFile = File(...)):
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
     """Multi-turn chat with the AI agent — supports streaming via SSE."""
-    system_prompt = _build_system_prompt(request.mode)
+    message_dicts = [m.model_dump() for m in request.messages]
+    memory_context = _get_memory_context(_latest_user_message(message_dicts))
+    system_prompt = _build_system_prompt(request.mode, memory_context)
     messages = [{"role": "system", "content": system_prompt}]
-    messages.extend([m.model_dump() for m in request.messages])
+    messages.extend(message_dicts)
 
     payload = {
         "messages": messages,
@@ -539,7 +716,8 @@ async def complete(request: CompletionRequest):
 @app.post("/api/terminal")
 async def terminal_agent(request: TerminalRequest):
     """Terminal agent — plans and streams multi-step shell task execution."""
-    system_prompt = _build_system_prompt(AgentMode.TERMINAL)
+    memory_context = _get_memory_context(request.task)
+    system_prompt = _build_system_prompt(AgentMode.TERMINAL, memory_context)
     messages = [{"role": "system", "content": system_prompt}]
 
     if request.context:

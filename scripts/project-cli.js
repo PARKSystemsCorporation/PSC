@@ -86,6 +86,7 @@ function ensureProjectFiles() {
   const directories = [
     resolvePathFromProject(env.MODELS_DIR, "./models"),
     resolvePathFromProject(env.HOST_WORKSPACE, "./workspace"),
+    path.dirname(resolvePathFromProject(env.MEMPALACE_PALACE_PATH, "./.mempalace/palace")),
     path.join(projectDir, "nginx", "ssl"),
   ];
 
@@ -125,10 +126,24 @@ function getDockerCommand() {
 }
 
 function buildComposeArgs(docker, extraArgs) {
+  const env = parseEnvFile(envPath);
+  const profiles = [];
+  const backend = (env.LLM_BACKEND || "llamacpp").trim().toLowerCase();
+  const personaplexEnabled = /^(1|true|yes|on)$/i.test((env.PERSONAPLEX_ENABLED || "").trim());
+
+  if (backend === "vllm") {
+    profiles.push("vllm");
+  }
+
+  if (personaplexEnabled) {
+    profiles.push("voice");
+  }
+
   return [
     ...docker.composeArgs,
     "-f",
     path.join(projectDir, "docker-compose.yml"),
+    ...profiles.flatMap((profile) => ["--profile", profile]),
     ...extraArgs,
   ];
 }
@@ -371,6 +386,8 @@ function showLocalIdeLogs() {
 async function startProject() {
   const env = ensureProjectFiles();
   const workspaceMount = getWorkspaceMount(env);
+  const personaplexEnabled = /^(1|true|yes|on)$/i.test((env.PERSONAPLEX_ENABLED || "").trim());
+  const personaplexPort = Number.parseInt(env.PERSONAPLEX_PORT || "8998", 10);
 
   try {
     checkModelAvailability(env);
@@ -471,6 +488,9 @@ async function startProject() {
   log("Gemma Theia IDE is running.");
   log(`Desktop: http://localhost:${idePort}`);
   log(`Mobile:  http://${getLocalIpAddress()}:${idePort}`);
+  if (personaplexEnabled) {
+    log(`Voice:   https://localhost:${personaplexPort}`);
+  }
   log(`Workspace: ${workspaceMount}`);
   log("Logs:    npm run logs");
   log("Stop:    npm run stop");
