@@ -37,10 +37,10 @@ export namespace CompletionCommands {
 export class AiCompletionContribution implements CommandContribution, KeybindingContribution {
 
     @inject(AiCompletionProvider)
-    protected readonly completionProvider: AiCompletionProvider;
+    protected readonly completionProvider!: AiCompletionProvider;
 
     @inject(EditorManager)
-    protected readonly editorManager: EditorManager;
+    protected readonly editorManager!: EditorManager;
 
     registerCommands(commands: CommandRegistry): void {
         commands.registerCommand(CompletionCommands.TRIGGER, {
@@ -60,15 +60,6 @@ export class AiCompletionContribution implements CommandContribution, Keybinding
                     if (editor) {
                         // Insert the completion text at the cursor
                         const cursor = editor.cursor;
-                        const edit = {
-                            range: {
-                                start: cursor,
-                                end: cursor,
-                            },
-                            newText: completion.text,
-                        };
-                        // Use Theia's TextDocumentSaveParticipant-compatible edit format
-                        const document = editor.document;
                         const textEdit = {
                             range: {
                                 start: { line: cursor.line, character: cursor.character },
@@ -76,7 +67,7 @@ export class AiCompletionContribution implements CommandContribution, Keybinding
                             },
                             newText: completion.text,
                         };
-                        document.applyEdits([textEdit as Parameters<typeof document.applyEdits>[0][0]]);
+                        editor.executeEdits([textEdit]);
                     }
                 }
             },

@@ -27,10 +27,10 @@ export class AiChatWidget extends ReactWidget {
     static readonly LABEL = 'Gemma AI';
 
     @inject(AiChatService)
-    protected readonly chatService: AiChatService;
+    protected readonly chatService!: AiChatService;
 
     @inject(EditorManager)
-    protected readonly editorManager: EditorManager;
+    protected readonly editorManager!: EditorManager;
 
     private messages: ChatMessage[] = [];
     private inputValue: string = '';
@@ -167,12 +167,13 @@ export class AiChatWidget extends ReactWidget {
         const selection = editor.editor.selection;
         const language = model.languageId || 'text';
 
-        if (selection && !selection.isEmpty) {
-            const selectedText = model.getText().substring(
-                model.offsetAt(selection.start),
-                model.offsetAt(selection.end),
-            );
-            return { code: selectedText, language };
+        if (selection) {
+            const startOffset = model.offsetAt(selection.start);
+            const endOffset = model.offsetAt(selection.end);
+            if (startOffset !== endOffset) {
+                const selectedText = model.getText().substring(startOffset, endOffset);
+                return { code: selectedText, language };
+            }
         }
 
         // If no selection, use visible portion or first 100 lines

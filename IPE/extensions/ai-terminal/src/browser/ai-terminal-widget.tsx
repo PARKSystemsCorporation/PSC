@@ -18,7 +18,7 @@ export class AiTerminalWidget extends ReactWidget {
     static readonly LABEL = 'Terminal Agent';
 
     @inject(AiTerminalAgent)
-    protected readonly agent: AiTerminalAgent;
+    protected readonly agent!: AiTerminalAgent;
 
     private taskInput: string = '';
     private logs: string[] = [];

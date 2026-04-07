@@ -17,11 +17,11 @@ from typing import Any, AsyncIterator, Optional
 
 import httpx
 import yaml
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
-from model_manager import GEMMA4_MODELS, get_model_path, list_available_models, recommend_model, verify_gpu, download_model
+from model_manager import GEMMA4_MODELS, get_model_path, list_available_models, list_local_gguf_models, recommend_model, verify_gpu, download_model
 
 
 # ---------------------------------------------------------------------------
@@ -150,14 +150,21 @@ class SetupRequest(BaseModel):
     hf_token: Optional[str] = Field(None, description="Optional HuggingFace token")
 
 
+class LocalModelSetupRequest(BaseModel):
+    filename: str = Field(..., description="GGUF filename already present in the models directory")
+
+
 class SetupStatusResponse(BaseModel):
     configured: bool
     backend: str
     desired_model: str
     recommended_model: str
+    models_dir: str
+    host_models_dir: str
     backend_ready: bool
     gpu: dict[str, Any]
     models: list[dict[str, Any]]
+    local_models: list[dict[str, Any]]
     download: dict[str, Any]
 
 
@@ -212,6 +219,13 @@ def _get_desired_backend() -> str:
     return _read_env_file().get("LLM_BACKEND", BACKEND)
 
 
+def _get_hf_token(provided_token: Optional[str] = None) -> Optional[str]:
+    if provided_token and provided_token.strip():
+        return provided_token.strip()
+    env_token = _read_env_file().get("HF_TOKEN") or os.environ.get("HF_TOKEN")
+    return env_token.strip() if env_token else None
+
+
 def _get_desired_model_key() -> str:
     env_values = _read_env_file()
     desired_filename = env_values.get("GEMMA_MODEL")
@@ -225,6 +239,13 @@ def _get_desired_model_key() -> str:
 def _is_model_configured() -> bool:
     model_key = _get_desired_model_key()
     return get_model_path(model_key) is not None
+
+
+def _is_local_model_configured() -> bool:
+    desired_filename = _read_env_file().get("GEMMA_MODEL")
+    if not desired_filename:
+        return False
+    return (Path(os.environ.get("MODELS_DIR", "/models")) / desired_filename).exists()
 
 
 def _compose_command(args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -257,13 +278,16 @@ def _restart_llama_service() -> None:
 def _build_setup_status(backend_ready: bool) -> SetupStatusResponse:
     desired_model = _get_desired_model_key()
     return SetupStatusResponse(
-        configured=_is_model_configured(),
+        configured=_is_model_configured() or _is_local_model_configured(),
         backend=_get_desired_backend(),
         desired_model=desired_model,
         recommended_model=recommend_model(),
+        models_dir=str(Path(os.environ.get("MODELS_DIR", "/models"))),
+        host_models_dir=str(PROJECT_DIR / "models"),
         backend_ready=backend_ready,
         gpu=verify_gpu(),
         models=list_available_models(),
+        local_models=list_local_gguf_models(),
         download=download_state,
     )
 
@@ -388,7 +412,12 @@ async def download_and_configure(request: SetupRequest):
 
     async def run_setup_job() -> None:
         try:
-            await asyncio.to_thread(download_model, request.model, request.hf_token)
+            hf_token = _get_hf_token(request.hf_token)
+            await asyncio.to_thread(download_model, request.model, hf_token)
+            if hf_token:
+                _write_env_updates({
+                    "HF_TOKEN": hf_token,
+                })
             _write_env_updates({
                 "LLM_BACKEND": "llamacpp",
                 "GEMMA_MODEL": model_info["filename"],
@@ -401,15 +430,64 @@ async def download_and_configure(request: SetupRequest):
                 "finished_at": time.time(),
             })
         except Exception as error:
+            error_message = str(error)
+            if "401" in error_message or "Repository Not Found" in error_message:
+                error_message = (
+                    "Download failed with 401 from Hugging Face. "
+                    "This model likely requires a Hugging Face token with access to the repo. "
+                    "Paste a token into the setup panel and try again."
+                )
             download_state.update({
                 "status": "error",
                 "model": request.model,
-                "error": str(error),
+                "error": error_message,
                 "finished_at": time.time(),
             })
 
     asyncio.create_task(run_setup_job())
     return {"accepted": True, "model": request.model}
+
+
+@app.post("/api/setup/configure-local-model")
+async def configure_local_model(request: LocalModelSetupRequest):
+    target_name = Path(request.filename).name
+    target_path = Path(os.environ.get("MODELS_DIR", "/models")) / target_name
+    if not target_path.exists() or target_path.suffix.lower() != ".gguf":
+        raise HTTPException(status_code=404, detail="Local GGUF file not found")
+
+    _write_env_updates({
+        "LLM_BACKEND": "llamacpp",
+        "GEMMA_MODEL": target_name,
+    })
+    await asyncio.to_thread(_restart_llama_service)
+    return {"configured": True, "filename": target_name}
+
+
+@app.post("/api/setup/upload-local-model")
+async def upload_local_model(file: UploadFile = File(...)):
+    filename = Path(file.filename or "").name
+    if not filename or not filename.lower().endswith(".gguf"):
+        raise HTTPException(status_code=400, detail="Please upload a .gguf model file")
+
+    models_dir = Path(os.environ.get("MODELS_DIR", "/models"))
+    models_dir.mkdir(parents=True, exist_ok=True)
+    target_path = models_dir / filename
+
+    try:
+        with target_path.open("wb") as target:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                target.write(chunk)
+    finally:
+        await file.close()
+
+    return {
+        "uploaded": True,
+        "filename": filename,
+        "path": str(target_path),
+    }
 
 
 @app.post("/api/chat")

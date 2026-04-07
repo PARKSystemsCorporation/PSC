@@ -26,6 +26,8 @@ export interface SetupStatus {
     backend: string;
     desired_model: string;
     recommended_model: string;
+    models_dir: string;
+    host_models_dir: string;
     backend_ready: boolean;
     gpu: {
         nvidia: boolean;
@@ -33,6 +35,11 @@ export interface SetupStatus {
         device_name: string;
     };
     models: ModelOption[];
+    local_models: Array<{
+        filename: string;
+        path: string;
+        size_gb: number;
+    }>;
     download: {
         status: 'idle' | 'running' | 'completed' | 'error';
         model?: string | null;
@@ -100,11 +107,14 @@ export class ConnectionManagerService {
         }
     }
 
-    async downloadAndConfigureModel(model: string): Promise<void> {
+    async downloadAndConfigureModel(model: string, hfToken?: string): Promise<void> {
         const resp = await fetch('/api/setup/download-and-configure', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model }),
+            body: JSON.stringify({
+                model,
+                hf_token: hfToken?.trim() || undefined,
+            }),
         });
 
         if (!resp.ok) {
@@ -113,6 +123,40 @@ export class ConnectionManagerService {
         }
 
         await this.loadSetupStatus();
+    }
+
+    async configureLocalModel(filename: string): Promise<void> {
+        const resp = await fetch('/api/setup/configure-local-model', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename }),
+        });
+
+        if (!resp.ok) {
+            const errorText = await resp.text();
+            throw new Error(errorText || 'Failed to configure local model');
+        }
+
+        await this.loadSetupStatus();
+    }
+
+    async uploadLocalModel(file: File): Promise<string> {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const resp = await fetch('/api/setup/upload-local-model', {
+            method: 'POST',
+            body: formData,
+        });
+
+        if (!resp.ok) {
+            const errorText = await resp.text();
+            throw new Error(errorText || 'Failed to upload local model');
+        }
+
+        const data = await resp.json() as { filename: string };
+        await this.loadSetupStatus();
+        return data.filename;
     }
 
     /**

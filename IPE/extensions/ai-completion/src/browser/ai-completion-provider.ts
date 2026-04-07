@@ -24,10 +24,10 @@ export interface InlineCompletion {
 export class AiCompletionProvider implements Disposable {
 
     @inject(AiChatService)
-    protected readonly chatService: AiChatService;
+    protected readonly chatService!: AiChatService;
 
     @inject(EditorManager)
-    protected readonly editorManager: EditorManager;
+    protected readonly editorManager!: EditorManager;
 
     private readonly disposables = new DisposableCollection();
     private debounceTimer: ReturnType<typeof setTimeout> | null = null;

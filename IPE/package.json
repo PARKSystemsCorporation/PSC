@@ -30,6 +30,9 @@
     "node": ">=18.0.0",
     "yarn": ">=1.22.0"
   },
+  "resolutions": {
+    "inversify": "6.0.1"
+  },
   "theiaPluginsDir": "plugins",
   "theiaPlugins": {
     "vscode-builtin-extensions-pack": "https://open-vsx.org/api/eclipse-theia/builtin-extension-pack/1.90.0/file/eclipse-theia.builtin-extension-pack-1.90.0.vsix"

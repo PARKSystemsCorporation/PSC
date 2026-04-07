@@ -84,6 +84,23 @@ def list_available_models() -> list[dict]:
     return results
 
 
+def list_local_gguf_models() -> list[dict]:
+    """List GGUF files already present in the local models directory."""
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    results = []
+    for path in sorted(MODELS_DIR.glob("*.gguf")):
+        try:
+            size_gb = round(path.stat().st_size / (1024 ** 3), 2)
+        except OSError:
+            size_gb = 0.0
+        results.append({
+            "filename": path.name,
+            "path": str(path),
+            "size_gb": size_gb,
+        })
+    return results
+
+
 def download_model(model_name: str = DEFAULT_MODEL, token: str | None = None) -> Path:
     """Download a Gemma 4 model. Returns the path to the downloaded model."""
     if model_name not in GEMMA4_MODELS:

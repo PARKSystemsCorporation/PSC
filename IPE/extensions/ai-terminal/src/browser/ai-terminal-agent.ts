@@ -31,7 +31,7 @@ export interface AgentPlan {
 export class AiTerminalAgent {
 
     @inject(AiChatService)
-    protected readonly chatService: AiChatService;
+    protected readonly chatService!: AiChatService;
 
     private plan: AgentPlan | null = null;
     private history: GemmaProtocol.Message[] = [];

@@ -2,7 +2,7 @@
  * Gemma Theia IDE — Connection Manager Frontend Module
  */
 
-import { ContainerModule, injectable, inject } from '@theia/core/shared/inversify';
+import { ContainerModule, injectable, inject, unmanaged } from '@theia/core/shared/inversify';
 import {
     bindViewContribution,
     FrontendApplicationContribution,
@@ -25,9 +25,12 @@ class ConnectionManagerContribution extends AbstractViewContribution<ConnectionM
     implements FrontendApplicationContribution {
 
     @inject(ConnectionManagerService)
-    protected readonly connectionService: ConnectionManagerService;
+    protected readonly connectionService!: ConnectionManagerService;
 
-    constructor() {
+    // `@unmanaged()` is required here because AbstractViewContribution's constructor
+    // takes plain widget options rather than an injectable service.
+    // @ts-expect-error Inversify's constructor-parameter decorator types are too narrow here.
+    constructor(@unmanaged() _viewOptions: unknown) {
         super({
             widgetId: CONNECTION_MANAGER_WIDGET_ID,
             widgetName: 'Setup',

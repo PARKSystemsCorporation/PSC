@@ -14,8 +14,6 @@
 #   docker compose down                     # Stop everything
 ###############################################################################
 
-version: "3.9"
-
 services:
   # ═══════════════════════════════════════════════════════════════════
   # NGINX — Reverse proxy (entry point)
@@ -87,7 +85,7 @@ services:
   # LLAMA SERVER — llama.cpp serving Gemma 4 GGUF
   # ═══════════════════════════════════════════════════════════════════
   llama-server:
-    image: ghcr.io/ggerganov/llama.cpp:server
+    image: ghcr.io/ggml-org/llama.cpp:server
     container_name: gemma-llama
     command: >
       --model /models/${GEMMA_MODEL:-gemma-4-12b-it-Q4_K_M.gguf}

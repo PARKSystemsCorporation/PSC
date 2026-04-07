@@ -4,7 +4,7 @@
  * Registers the AI chat widget, commands, and keybindings.
  */
 
-import { injectable, inject } from '@theia/core/shared/inversify';
+import { injectable, unmanaged } from '@theia/core/shared/inversify';
 import {
     AbstractViewContribution,
     FrontendApplication,
@@ -42,7 +42,10 @@ export namespace GemmaCommands {
 export class AiChatContribution extends AbstractViewContribution<AiChatWidget>
     implements FrontendApplicationContribution {
 
-    constructor() {
+    // `@unmanaged()` is required here because AbstractViewContribution's constructor
+    // takes plain widget options rather than an injectable service.
+    // @ts-expect-error Inversify's constructor-parameter decorator types are too narrow here.
+    constructor(@unmanaged() _viewOptions: unknown) {
         super({
             widgetId: AI_CHAT_WIDGET_ID,
             widgetName: 'Gemma AI',

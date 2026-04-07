@@ -10,6 +10,8 @@ const repoRoot = path.resolve(__dirname, "..");
 const projectDir = path.join(repoRoot, "IPE");
 const envExamplePath = path.join(projectDir, ".env.example");
 const envPath = path.join(projectDir, ".env");
+const localIdePidPath = path.join(projectDir, ".local-ide.pid");
+const localIdeLogPath = path.join(projectDir, ".local-ide.log");
 
 function log(message) {
   process.stdout.write(`${message}\n`);
@@ -18,6 +20,13 @@ function log(message) {
 function fail(message) {
   process.stderr.write(`${message}\n`);
   process.exit(1);
+}
+
+function commandExists(command, args) {
+  return spawnSync(command, args, {
+    shell: process.platform === "win32" && command === "npm",
+    stdio: "ignore",
+  }).status === 0;
 }
 
 function parseEnvFile(filePath) {
@@ -98,14 +107,14 @@ function getWorkspaceMount(env) {
 }
 
 function getDockerCommand() {
-  if (spawnSync("docker", ["compose", "version"], { stdio: "ignore" }).status === 0) {
+  if (commandExists("docker", ["compose", "version"])) {
     return {
       command: "docker",
       composeArgs: ["compose"],
     };
   }
 
-  if (spawnSync("docker-compose", ["version"], { stdio: "ignore" }).status === 0) {
+  if (commandExists("docker-compose", ["version"])) {
     return {
       command: "docker-compose",
       composeArgs: [],
@@ -228,6 +237,137 @@ function waitForIde(port, timeoutMs) {
   });
 }
 
+function localIdeDependenciesReady() {
+  return (
+    fs.existsSync(path.join(projectDir, "node_modules")) &&
+    fs.existsSync(path.join(projectDir, "applications", "browser", "src-gen", "backend", "main.js"))
+  );
+}
+
+function canLaunchLocalIde() {
+  return (
+    localIdeDependenciesReady() &&
+    commandExists("npm", ["exec", "--prefix", projectDir, "theia", "--", "--version"])
+  );
+}
+
+function writeIfPresent(stream, content) {
+  if (content) {
+    stream.write(content);
+    if (!content.endsWith("\n")) {
+      stream.write("\n");
+    }
+  }
+}
+
+function isDockerDaemonUnavailable(output) {
+  return /(dockerdesktoplinuxengine|docker api|the daemon is not running|cannot connect to the docker daemon|error during connect|open \/\/\.\/pipe\/docker)/i.test(
+    output,
+  );
+}
+
+function startDetachedLocalIde(env, workspaceMount) {
+  const idePort = Number.parseInt(env.IDE_PORT || "3000", 10);
+
+  if (fs.existsSync(localIdePidPath)) {
+    const existingPid = Number.parseInt(fs.readFileSync(localIdePidPath, "utf8").trim(), 10);
+    if (Number.isInteger(existingPid) && existingPid > 0) {
+      try {
+        process.kill(existingPid, 0);
+        log(`A local IDE process is already recorded (PID ${existingPid}). Reusing it.`);
+        return idePort;
+      } catch (_error) {
+        fs.rmSync(localIdePidPath, { force: true });
+      }
+    } else {
+      fs.rmSync(localIdePidPath, { force: true });
+    }
+  }
+
+  const logFd = fs.openSync(localIdeLogPath, "a");
+  const child = spawn(
+    "npm",
+    [
+      "exec",
+      "--prefix",
+      projectDir,
+      "theia",
+      "--",
+      "start",
+      "--hostname=0.0.0.0",
+      `--port=${idePort}`,
+      "--plugins=local-dir:../../plugins",
+      workspaceMount,
+    ],
+    {
+      cwd: path.join(projectDir, "applications", "browser"),
+      detached: true,
+      env: {
+        ...process.env,
+        HOST_WORKSPACE: workspaceMount,
+      },
+      shell: process.platform === "win32",
+      stdio: ["ignore", logFd, logFd],
+    },
+  );
+
+  fs.closeSync(logFd);
+  fs.writeFileSync(localIdePidPath, String(child.pid));
+  child.unref();
+
+  return idePort;
+}
+
+function stopLocalIde() {
+  if (!fs.existsSync(localIdePidPath)) {
+    return false;
+  }
+
+  const pid = Number.parseInt(fs.readFileSync(localIdePidPath, "utf8").trim(), 10);
+  fs.rmSync(localIdePidPath, { force: true });
+
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return true;
+  }
+
+  if (process.platform === "win32") {
+    spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
+  } else {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch (_error) {
+      return true;
+    }
+  }
+
+  return true;
+}
+
+function showLocalIdeLogs() {
+  if (!fs.existsSync(localIdeLogPath)) {
+    fail("No local IDE log file was found yet.");
+  }
+
+  if (process.platform === "win32") {
+    const child = spawn(
+      "powershell",
+      ["-NoLogo", "-NoProfile", "-Command", `Get-Content -Path '${localIdeLogPath}' -Wait`],
+      { stdio: "inherit" },
+    );
+
+    child.on("exit", (code) => {
+      process.exit(code ?? 0);
+    });
+    return true;
+  }
+
+  const child = spawn("tail", ["-f", localIdeLogPath], { stdio: "inherit" });
+  child.on("exit", (code) => {
+    process.exit(code ?? 0);
+  });
+  return true;
+}
+
 async function startProject() {
   const env = ensureProjectFiles();
   const workspaceMount = getWorkspaceMount(env);
@@ -248,7 +388,8 @@ async function startProject() {
         ...process.env,
         HOST_WORKSPACE: workspaceMount,
       },
-      stdio: "inherit",
+      encoding: "utf8",
+      stdio: "pipe",
     },
   );
 
@@ -257,8 +398,59 @@ async function startProject() {
   }
 
   if (upResult.status !== 0) {
+    const combinedDockerOutput = `${upResult.stdout || ""}${upResult.stderr || ""}`;
+
+    if (isDockerDaemonUnavailable(combinedDockerOutput)) {
+      if (!canLaunchLocalIde()) {
+        const windowsBuildToolsNote = process.platform === "win32"
+          ? 'On Windows, local Theia bootstrap also needs Visual Studio Build Tools with the "Desktop development with C++" workload.'
+          : null;
+        fail(
+          [
+            "Docker is installed, but the Docker daemon is not reachable, so the containerized IDE could not start.",
+            "The repo is also not bootstrapped for local IDE fallback yet.",
+            "To keep the UI available without Docker, run `corepack yarn install` inside `IPE`, then run `npm start` again.",
+            windowsBuildToolsNote,
+            "Or start Docker Desktop and retry `npm start`.",
+            "",
+            combinedDockerOutput.trim(),
+          ].filter(Boolean).join("\n"),
+        );
+      }
+
+      log("Docker Desktop is not running. Falling back to a local Theia IDE process.");
+      const idePort = startDetachedLocalIde(env, workspaceMount);
+      log(`Waiting for the IDE on http://localhost:${idePort} ...`);
+
+      try {
+        await waitForIde(idePort, 120000);
+      } catch (error) {
+        fail(
+          [
+            error.message,
+            "The local IDE process was started, but the browser UI is not reachable yet.",
+            `Check logs in ${path.relative(repoRoot, localIdeLogPath)} or run npm run logs.`,
+          ].join("\n"),
+        );
+      }
+
+      log("");
+      log("Gemma Theia IDE is running.");
+      log(`Desktop: http://localhost:${idePort}`);
+      log(`Mobile:  http://${getLocalIpAddress()}:${idePort}`);
+      log(`Workspace: ${workspaceMount}`);
+      log(`Logs:    npm run logs (${path.relative(repoRoot, localIdeLogPath)})`);
+      log("Stop:    npm run stop");
+      return;
+    }
+
+    writeIfPresent(process.stdout, upResult.stdout);
+    writeIfPresent(process.stderr, upResult.stderr);
     process.exit(upResult.status ?? 1);
   }
+
+  writeIfPresent(process.stdout, upResult.stdout);
+  writeIfPresent(process.stderr, upResult.stderr);
 
   const idePort = Number.parseInt(env.IDE_PORT || "3000", 10);
   log(`Waiting for the IDE on http://localhost:${idePort} ...`);
@@ -296,9 +488,17 @@ async function main() {
       await startProject();
       return;
     case "stop":
+      if (stopLocalIde()) {
+        log("Stopped the local IDE process.");
+        return;
+      }
       runCompose(["down"]);
       return;
     case "logs": {
+      if (fs.existsSync(localIdePidPath) || fs.existsSync(localIdeLogPath)) {
+        showLocalIdeLogs();
+        return;
+      }
       const docker = getDockerCommand();
       const child = spawn(
         docker.command,

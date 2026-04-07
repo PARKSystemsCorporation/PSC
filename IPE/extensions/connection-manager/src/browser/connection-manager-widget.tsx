@@ -19,7 +19,7 @@ export class ConnectionManagerWidget extends ReactWidget {
     static readonly LABEL = 'Setup';
 
     @inject(ConnectionManagerService)
-    protected readonly connectionService: ConnectionManagerService;
+    protected readonly connectionService!: ConnectionManagerService;
 
     private connectionInfo: ConnectionInfo | null = null;
     private isStartingTunnel: boolean = false;
@@ -27,6 +27,11 @@ export class ConnectionManagerWidget extends ReactWidget {
     private setupStatus: SetupStatus | null = null;
     private isRefreshingSetup: boolean = false;
     private setupError: string | null = null;
+    private hfToken: string = '';
+    private selectedLocalModel: string = '';
+    private isUploadingLocalModel: boolean = false;
+    private isLocalDropTarget: boolean = false;
+    private localFileInput: HTMLInputElement | null = null;
 
     @postConstruct()
     protected init(): void {
@@ -59,6 +64,9 @@ export class ConnectionManagerWidget extends ReactWidget {
         if (status) {
             this.setupStatus = status;
             this.setupError = null;
+            if (this.selectedLocalModel && !status.local_models.some(model => model.filename === this.selectedLocalModel)) {
+                this.selectedLocalModel = '';
+            }
         } else {
             this.setupError = 'Unable to load AI setup status.';
         }
@@ -97,11 +105,42 @@ export class ConnectionManagerWidget extends ReactWidget {
     private async handleModelSetup(model: ModelOption): Promise<void> {
         this.setupError = null;
         try {
-            await this.connectionService.downloadAndConfigureModel(model.name);
+            await this.connectionService.downloadAndConfigureModel(model.name, this.hfToken);
         } catch (err: any) {
             this.setupError = err.message || 'Failed to configure model.';
         }
         await this.refreshSetupStatus();
+    }
+
+    private async handleLocalModelSetup(filename: string): Promise<void> {
+        this.setupError = null;
+        try {
+            await this.connectionService.configureLocalModel(filename);
+        } catch (err: any) {
+            this.setupError = err.message || 'Failed to configure local model.';
+        }
+        await this.refreshSetupStatus();
+    }
+
+    private async handleLocalFileUpload(file: File): Promise<void> {
+        this.setupError = null;
+        this.isUploadingLocalModel = true;
+        this.update();
+        try {
+            const filename = await this.connectionService.uploadLocalModel(file);
+            this.selectedLocalModel = filename;
+            await this.connectionService.configureLocalModel(filename);
+        } catch (err: any) {
+            this.setupError = err.message || 'Failed to upload local model.';
+        } finally {
+            this.isUploadingLocalModel = false;
+            this.isLocalDropTarget = false;
+            await this.refreshSetupStatus();
+        }
+    }
+
+    private openLocalFilePicker(): void {
+        this.localFileInput?.click();
     }
 
     private copyUrl(url: string): void {
@@ -112,6 +151,10 @@ export class ConnectionManagerWidget extends ReactWidget {
         const info = this.connectionInfo || this.connectionService.info;
         const setup = this.setupStatus;
         const supportedModels = setup?.models.filter(model => model.supported_in_app) || [];
+        const localModels = setup?.local_models || [];
+        const chosenLocalModel = localModels.some(model => model.filename === this.selectedLocalModel)
+            ? this.selectedLocalModel
+            : (localModels[0]?.filename || '');
 
         return (
             <div className="gemma-conn-container">
@@ -161,7 +204,7 @@ export class ConnectionManagerWidget extends ReactWidget {
                             <div className="gemma-setup-header">
                                 <div>
                                     <h3>AI Setup</h3>
-                                    <p>Bring the IDE up first, then configure AI when you are ready.</p>
+                                    <p>Bring the IDE up first, then configure AI when you are ready. Local GGUF files work without any hosted API.</p>
                                 </div>
                                 <button
                                     className="gemma-btn gemma-btn-primary"
@@ -210,6 +253,128 @@ export class ConnectionManagerWidget extends ReactWidget {
                                     <span>{this.setupError || setup?.download.error}</span>
                                 </div>
                             )}
+
+                            <div className="gemma-token-panel">
+                                <h4>Hugging Face Access</h4>
+                                <p>
+                                    Only needed if you want the app to download a model for you. If you already have a GGUF file,
+                                    place it in <code>{setup?.host_models_dir || setup?.models_dir || '/models'}</code> and use it from the local files section below.
+                                </p>
+                                <input
+                                    className="gemma-token-input"
+                                    type="password"
+                                    placeholder="hf_xxxxxxxxxxxxxxxxxxxx"
+                                    value={this.hfToken}
+                                    onChange={event => {
+                                        this.hfToken = event.currentTarget.value;
+                                        this.update();
+                                    }}
+                                />
+                            </div>
+
+                            <div className="gemma-token-panel">
+                                <h4>Local GGUF Files</h4>
+                                <p>
+                                    Drop a <code>.gguf</code> file into <code>{setup?.host_models_dir || setup?.models_dir || '/models'}</code>, click <strong>Refresh Scan</strong>,
+                                    then choose it here. This keeps inference fully local.
+                                </p>
+                                <input
+                                    ref={element => { this.localFileInput = element; }}
+                                    type="file"
+                                    accept=".gguf"
+                                    style={{ display: 'none' }}
+                                    onChange={event => {
+                                        const file = event.currentTarget.files?.[0];
+                                        if (file) {
+                                            void this.handleLocalFileUpload(file);
+                                        }
+                                        event.currentTarget.value = '';
+                                    }}
+                                />
+                                <div
+                                    className={`gemma-drop-zone ${this.isLocalDropTarget ? 'dragging' : ''}`}
+                                    onDragOver={event => {
+                                        event.preventDefault();
+                                        if (!this.isLocalDropTarget) {
+                                            this.isLocalDropTarget = true;
+                                            this.update();
+                                        }
+                                    }}
+                                    onDragLeave={event => {
+                                        event.preventDefault();
+                                        if (this.isLocalDropTarget) {
+                                            this.isLocalDropTarget = false;
+                                            this.update();
+                                        }
+                                    }}
+                                    onDrop={event => {
+                                        event.preventDefault();
+                                        this.isLocalDropTarget = false;
+                                        const file = event.dataTransfer.files?.[0];
+                                        if (file) {
+                                            void this.handleLocalFileUpload(file);
+                                        } else {
+                                            this.update();
+                                        }
+                                    }}
+                                >
+                                    <div className="gemma-drop-zone-title">
+                                        {this.isUploadingLocalModel ? 'Uploading local model...' : 'Drag and drop a .gguf here'}
+                                    </div>
+                                    <div className="gemma-drop-zone-subtitle">
+                                        {this.isUploadingLocalModel
+                                            ? 'The IDE will scan and configure it automatically.'
+                                            : 'Or browse for a model file from your computer.'}
+                                    </div>
+                                    <button
+                                        className="gemma-btn gemma-btn-secondary"
+                                        onClick={() => this.openLocalFilePicker()}
+                                        disabled={this.isUploadingLocalModel}
+                                    >
+                                        Browse for GGUF
+                                    </button>
+                                </div>
+                                {localModels.length > 0 ? (
+                                    <div className="gemma-local-picker">
+                                        <label htmlFor="gemma-local-model-select">Detected local models</label>
+                                        <div className="gemma-local-picker-row">
+                                            <select
+                                                id="gemma-local-model-select"
+                                                className="gemma-local-select"
+                                                value={chosenLocalModel}
+                                                onChange={event => {
+                                                    this.selectedLocalModel = event.currentTarget.value;
+                                                    this.update();
+                                                }}
+                                            >
+                                                {localModels.map(model => (
+                                                    <option key={model.filename} value={model.filename}>
+                                                        {model.filename} ({model.size_gb} GB)
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <button
+                                                className="gemma-btn gemma-btn-primary"
+                                                onClick={() => void this.handleLocalModelSetup(chosenLocalModel)}
+                                                disabled={!chosenLocalModel || this.isUploadingLocalModel || setup?.download.status === 'running'}
+                                            >
+                                                Use Selected Model
+                                            </button>
+                                        </div>
+                                        <div className="gemma-model-meta">
+                                            <span className="gemma-model-pill downloaded">Detected locally</span>
+                                            {setup?.desired_model === chosenLocalModel && chosenLocalModel && (
+                                                <span className="gemma-model-pill selected">Current choice</span>
+                                            )}
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="gemma-setup-banner info">
+                                        <strong>No local GGUF files found yet.</strong>
+                                        <span>Add a model file to <code>{setup?.host_models_dir || setup?.models_dir || '/models'}</code> and refresh the scan.</span>
+                                    </div>
+                                )}
+                            </div>
 
                             <div className="gemma-model-grid">
                                 {supportedModels.map(model => {
@@ -451,6 +616,79 @@ export class ConnectionManagerWidget extends ReactWidget {
                         display: grid;
                         grid-template-columns: 1fr;
                         gap: 12px;
+                    }
+                    .gemma-token-panel {
+                        border: 1px solid var(--theia-panel-border);
+                        border-radius: 10px;
+                        padding: 14px;
+                        margin-bottom: 16px;
+                        background: var(--theia-editor-background);
+                    }
+                    .gemma-token-panel h4 {
+                        margin: 0 0 6px 0;
+                        font-size: 14px;
+                    }
+                    .gemma-token-panel p {
+                        margin: 0 0 10px 0;
+                        font-size: 12px;
+                        opacity: 0.8;
+                    }
+                    .gemma-token-input {
+                        width: 100%;
+                        box-sizing: border-box;
+                        padding: 10px 12px;
+                        border-radius: 8px;
+                        border: 1px solid var(--theia-panel-border);
+                        background: var(--theia-input-background);
+                        color: var(--theia-input-foreground);
+                        font: inherit;
+                    }
+                    .gemma-drop-zone {
+                        display: flex;
+                        flex-direction: column;
+                        align-items: center;
+                        justify-content: center;
+                        gap: 10px;
+                        padding: 18px;
+                        margin-bottom: 14px;
+                        border-radius: 10px;
+                        border: 2px dashed var(--theia-panel-border);
+                        background: rgba(33, 150, 243, 0.06);
+                        text-align: center;
+                        transition: border-color 0.2s, background 0.2s;
+                    }
+                    .gemma-drop-zone.dragging {
+                        border-color: var(--theia-focusBorder);
+                        background: rgba(33, 150, 243, 0.14);
+                    }
+                    .gemma-drop-zone-title {
+                        font-size: 14px;
+                        font-weight: 600;
+                    }
+                    .gemma-drop-zone-subtitle {
+                        font-size: 12px;
+                        opacity: 0.8;
+                    }
+                    .gemma-local-picker label {
+                        display: block;
+                        margin-bottom: 6px;
+                        font-size: 12px;
+                        opacity: 0.8;
+                    }
+                    .gemma-local-picker-row {
+                        display: flex;
+                        gap: 10px;
+                        align-items: center;
+                    }
+                    .gemma-local-select {
+                        flex: 1;
+                        min-width: 0;
+                        padding: 10px 12px;
+                        border-radius: 8px;
+                        border: 1px solid var(--theia-panel-border);
+                        background: var(--theia-input-background);
+                        color: var(--theia-input-foreground);
+                        font: inherit;
                     }
                     .gemma-model-card {
                         border: 1px solid var(--theia-panel-border);

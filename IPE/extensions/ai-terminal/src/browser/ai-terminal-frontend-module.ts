@@ -2,7 +2,7 @@
  * Gemma Theia IDE — Terminal Agent Frontend Module
  */
 
-import { ContainerModule, injectable } from '@theia/core/shared/inversify';
+import { ContainerModule, injectable, unmanaged } from '@theia/core/shared/inversify';
 import {
     bindViewContribution,
     FrontendApplicationContribution,
@@ -24,7 +24,10 @@ const TOGGLE_TERMINAL_AGENT: Command = {
 class AiTerminalContribution extends AbstractViewContribution<AiTerminalWidget>
     implements FrontendApplicationContribution {
 
-    constructor() {
+    // `@unmanaged()` is required here because AbstractViewContribution's constructor
+    // takes plain widget options rather than an injectable service.
+    // @ts-expect-error Inversify's constructor-parameter decorator types are too narrow here.
+    constructor(@unmanaged() _viewOptions: unknown) {
         super({
             widgetId: AI_TERMINAL_WIDGET_ID,
             widgetName: 'Terminal Agent',
