@@ -1,39 +1,49 @@
 # PSC — PARK Systems Corporation Open Source
 
-## Gemma Theia IDE
+## Gemma Theia IDE (Native Local Edition)
 
 AI-powered local coding IDE built on [Eclipse Theia](https://theia-ide.org/) with [Google Gemma 4](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/) agent capabilities.
 
 > **Status:** Beta — ready for testing and contributions.
 
+This project has been completely overhauled to run **entirely locally and natively on Windows**, with Docker completely removed for a true offline local-first experience.
+
 ### Quick Start
 
-```bash
-cd PSC
-npm start
+1. **Install Node modules & Build native extensions**
+   ```bash
+   cd PSC/IPE
+   corepack yarn install
+   yarn build
+   ```
+
+2. **Start the IDE**
+   ```bash
+   cd PSC
+   npm start
+   ```
+
+`npm start` now natively bootstraps `IPE/.env`, mounts the full cloned repo into the local IDE process, and serves the UI over `http://localhost:3000`.
+
+### Starting the AI Server
+
+To use the AI capabilities, you need to run the Python LLM server proxy alongside the IDE:
+
+```powershell
+.\scripts\start-llm.ps1
 ```
 
-`npm start` now bootstraps `IPE/.env`, mounts the full cloned repo into the IDE, and starts the Docker stack from the repo root.
+This script will automatically create a local Python virtual environment (`.venv`), install dependencies, and launch the server. Ensure you have Python installed on your system. 
 
-If no model is present yet, `npm start` still launches the IDE and shows an in-app setup flow so users can configure and download a model from the UI.
-
-PersonaPlex voice mode is available as an optional companion service. Set `PERSONAPLEX_ENABLED=true` in `IPE/.env`, add `HF_TOKEN` with access to `nvidia/personaplex-7b-v1`, and `npm start` will also launch the local voice UI on `https://localhost:8998`.
-
-MemPalace memory is also supported for fully local recall. Set `MEMPALACE_ENABLED=true` in `IPE/.env`, rebuild the stack, then initialize and mine the repo with `docker compose -f IPE/docker-compose.yml exec llm-server mempalace init /workspace/project --yes` and `docker compose -f IPE/docker-compose.yml exec llm-server mempalace mine /workspace/project --wing psc`.
-
-Inside the IDE, the integrated terminal runs with admin-level access in the container and includes common dev tools like `git`, `docker`, `python`, `ripgrep`, and build tooling.
-
-See the project docs in [`IPE/README.md`](IPE/README.md).
+*(Note: You will also need a local instance of `llama.cpp` or vLLM running to serve the GGUF model files).*
 
 ### Key Features
 
 - **Gemma 4 AI Agent** — Chat, inline completion, refactoring, and autonomous terminal agent
 - **Eclipse Theia Foundation** — Full VS Code-compatible IDE experience
-- **iPad & Mobile Access** — Connect from any device via local WiFi or Railway cloud tunnel
+- **Pure Local Execution** — No Docker, no container overhead, running natively on your host machine.
+- **iPad & Mobile Access** — Connect from any device via local WiFi
 - **Local-First** — All AI inference runs on your machine via llama.cpp or vLLM
-- **Optional PersonaPlex Voice UI** — Local speech-to-speech companion on a separate port
-- **Optional MemPalace Memory** — Local wake-up context and search-backed recall
-- **Docker Compose** — One command to start everything
 
 ### License
 

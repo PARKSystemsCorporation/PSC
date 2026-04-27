@@ -1,0 +1,5 @@
+node_modules/
+.venv/
+src-gen/
+gen-webpack.*.config.js
+gen-webpack.config.js

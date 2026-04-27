@@ -1,0 +1,10 @@
+wing: psc
+rooms:
+- name: ipe
+  description: Files from IPE/
+- name: scripts
+  description: Files from scripts/
+- name: backend
+  description: Files from models/
+- name: general
+  description: Files that don't fit other rooms

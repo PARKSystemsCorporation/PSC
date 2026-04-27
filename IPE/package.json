@@ -8,12 +8,7 @@
     "clean": "lerna clean && rimraf node_modules",
     "build": "lerna run build",
     "watch": "lerna run watch --parallel",
-    "start": "cd applications/browser && yarn start",
-    "start:docker": "node ../scripts/project-cli.js start",
     "start:debug": "cd applications/browser && yarn start --inspect",
-    "setup:docker": "node ../scripts/project-cli.js setup",
-    "stop:docker": "node ../scripts/project-cli.js stop",
-    "logs:docker": "node ../scripts/project-cli.js logs",
     "download:plugins": "theia download:plugins --rate-limit=15",
     "prepare": "lerna run prepare"
   },
