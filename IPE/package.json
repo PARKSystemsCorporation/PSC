@@ -10,7 +10,10 @@
     "watch": "lerna run watch --parallel",
     "start:debug": "cd applications/browser && yarn start --inspect",
     "download:plugins": "theia download:plugins --rate-limit=15",
-    "prepare": "lerna run prepare"
+    "prepare": "lerna run prepare",
+    "postinstall": "patch-package",
+    "setup:native": "node scripts/setup-native.js",
+    "bootstrap": "yarn install --ignore-scripts && patch-package && yarn run setup:native"
   },
   "workspaces": [
     "applications/*",
@@ -18,6 +21,8 @@
   ],
   "devDependencies": {
     "lerna": "^8.1.0",
+    "patch-package": "^8.0.1",
+    "postinstall-postinstall": "^2.1.0",
     "rimraf": "^5.0.5",
     "typescript": "~5.4.5"
   },

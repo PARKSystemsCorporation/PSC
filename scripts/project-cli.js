@@ -2,16 +2,34 @@
 
 const fs = require("fs");
 const http = require("http");
+const net = require("net");
 const os = require("os");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
+const httpProxy = require("http-proxy");
 
 const repoRoot = path.resolve(__dirname, "..");
 const projectDir = path.join(repoRoot, "IPE");
 const envExamplePath = path.join(projectDir, ".env.example");
 const envPath = path.join(projectDir, ".env");
-const localIdePidPath = path.join(projectDir, ".local-ide.pid");
-const localIdeLogPath = path.join(projectDir, ".local-ide.log");
+
+const components = {
+  ide: {
+    label: "Local Theia IDE",
+    pidFile: path.join(projectDir, ".local-ide.pid"),
+    logFile: path.join(projectDir, ".local-ide.log"),
+  },
+  llm: {
+    label: "LLM server",
+    pidFile: path.join(projectDir, ".llm-server.pid"),
+    logFile: path.join(projectDir, ".llm-server.log"),
+  },
+  telegram: {
+    label: "Telegram bridge",
+    pidFile: path.join(projectDir, ".telegram.pid"),
+    logFile: path.join(projectDir, ".telegram.log"),
+  },
+};
 
 function log(message) {
   process.stdout.write(`${message}\n`);
@@ -48,6 +66,11 @@ function parseEnvFile(filePath) {
     entries[key] = value;
   }
   return entries;
+}
+
+function isTruthy(value) {
+  if (value === undefined || value === null) return false;
+  return ["1", "true", "yes", "on"].includes(String(value).trim().toLowerCase());
 }
 
 function resolvePathFromProject(inputPath, fallbackPath) {
@@ -92,12 +115,82 @@ function getLocalIpAddress() {
   return "localhost";
 }
 
-function waitForIde(port, timeoutMs) {
+function isPidLive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+function probePort(port, timeoutMs = 1500) {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host: "127.0.0.1", port });
+    let settled = false;
+    const finish = (alive) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(alive);
+    };
+    socket.setTimeout(timeoutMs, () => finish(false));
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+  });
+}
+
+function readPid(pidFile) {
+  if (!fs.existsSync(pidFile)) return null;
+  const raw = fs.readFileSync(pidFile, "utf8").trim();
+  const pid = Number.parseInt(raw, 10);
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+async function reconcilePid(component, port) {
+  const pid = readPid(component.pidFile);
+  if (pid === null) return null;
+
+  const pidAlive = isPidLive(pid);
+  const portAlive = port ? await probePort(port) : pidAlive;
+
+  if (pidAlive && portAlive) return pid;
+
+  fs.rmSync(component.pidFile, { force: true });
+  return null;
+}
+
+function killPid(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  if (process.platform === "win32") {
+    spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
+  } else {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch (_error) {
+      // Process already gone — nothing to do.
+    }
+  }
+}
+
+function stopComponent(component) {
+  const pid = readPid(component.pidFile);
+  if (pid === null) {
+    fs.rmSync(component.pidFile, { force: true });
+    return false;
+  }
+  fs.rmSync(component.pidFile, { force: true });
+  killPid(pid);
+  return true;
+}
+
+function waitForHttp(port, timeoutMs, urlPath = "/") {
   const startedAt = Date.now();
   return new Promise((resolve, reject) => {
     const attempt = () => {
       const request = http.get(
-        { host: "127.0.0.1", port, path: "/", timeout: 3000 },
+        { host: "127.0.0.1", port, path: urlPath, timeout: 3000 },
         (response) => {
           response.resume();
           resolve();
@@ -106,7 +199,7 @@ function waitForIde(port, timeoutMs) {
       request.on("timeout", () => request.destroy());
       request.on("error", () => {
         if (Date.now() - startedAt >= timeoutMs) {
-          reject(new Error(`Timed out waiting for http://localhost:${port}`));
+          reject(new Error(`Timed out waiting for http://127.0.0.1:${port}${urlPath}`));
           return;
         }
         setTimeout(attempt, 2000);
@@ -130,24 +223,17 @@ function canLaunchLocalIde() {
   );
 }
 
-function startDetachedLocalIde(env, workspaceMount) {
-  const idePort = Number.parseInt(env.IDE_PORT || "3000", 10);
-  if (fs.existsSync(localIdePidPath)) {
-    const existingPid = Number.parseInt(fs.readFileSync(localIdePidPath, "utf8").trim(), 10);
-    if (Number.isInteger(existingPid) && existingPid > 0) {
-      try {
-        process.kill(existingPid, 0);
-        log(`A local IDE process is already recorded (PID ${existingPid}). Reusing it.`);
-        return idePort;
-      } catch (_error) {
-        fs.rmSync(localIdePidPath, { force: true });
-      }
-    } else {
-      fs.rmSync(localIdePidPath, { force: true });
-    }
+async function startDetachedLocalIde(env, workspaceMount) {
+  const publicPort = Number.parseInt(env.IDE_PORT || "3000", 10);
+  const idePort = publicPort + 1;
+
+  const livePid = await reconcilePid(components.ide, idePort);
+  if (livePid !== null) {
+    log(`A local IDE process is already running (PID ${livePid}). Reusing it.`);
+    return { publicPort, idePort, reused: true };
   }
 
-  const logFd = fs.openSync(localIdeLogPath, "a");
+  const logFd = fs.openSync(components.ide.logFile, "a");
   const child = spawn(
     "npm",
     [
@@ -175,48 +261,175 @@ function startDetachedLocalIde(env, workspaceMount) {
   );
 
   fs.closeSync(logFd);
-  fs.writeFileSync(localIdePidPath, String(child.pid));
+  fs.writeFileSync(components.ide.pidFile, String(child.pid));
   child.unref();
 
-  return idePort;
+  return { publicPort, idePort, reused: false };
 }
 
-function stopLocalIde() {
-  if (!fs.existsSync(localIdePidPath)) {
-    return false;
+function llmServerPort(env) {
+  return Number.parseInt(env.LLM_SERVER_PORT || "8000", 10);
+}
+
+async function startDetachedLlmServer(env) {
+  if (!isTruthy(env.START_LLM_SERVER ?? "true")) {
+    log("LLM server auto-start disabled (START_LLM_SERVER=false). Skipping.");
+    return null;
   }
-  const pid = Number.parseInt(fs.readFileSync(localIdePidPath, "utf8").trim(), 10);
-  fs.rmSync(localIdePidPath, { force: true });
-  if (!Number.isInteger(pid) || pid <= 0) return true;
+
+  const port = llmServerPort(env);
+  const livePid = await reconcilePid(components.llm, port);
+  if (livePid !== null) {
+    log(`LLM server already running (PID ${livePid}). Reusing it.`);
+    return { port, reused: true };
+  }
+
+  const logFd = fs.openSync(components.llm.logFile, "a");
+  let child;
+
+  const llmServerDir = path.join(projectDir, "llm-server");
+  const venvPython =
+    process.platform === "win32"
+      ? path.join(llmServerDir, ".venv", "Scripts", "python.exe")
+      : path.join(llmServerDir, ".venv", "bin", "python");
 
   if (process.platform === "win32") {
-    spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
-  } else {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch (_error) {
-      return true;
+    if (fs.existsSync(venvPython)) {
+      // Skip the PowerShell wrapper once the venv exists — running python
+      // directly with -u gives us live, unbuffered logs and a stable PID.
+      child = spawn(
+        venvPython,
+        ["-u", path.join(llmServerDir, "server.py")],
+        {
+          cwd: llmServerDir,
+          detached: true,
+          env: {
+            ...process.env,
+            CONFIG_PATH: path.join(llmServerDir, "config.yaml"),
+            ENV_FILE: envPath,
+            PROJECT_DIR: repoRoot,
+            PYTHONUNBUFFERED: "1",
+          },
+          stdio: ["ignore", logFd, logFd],
+        }
+      );
+    } else {
+      // First-run path: PowerShell creates the venv and installs deps.
+      const startScript = path.join(repoRoot, "scripts", "start-llm.ps1");
+      if (!fs.existsSync(startScript)) {
+        fs.closeSync(logFd);
+        fail(`Cannot start LLM server — script not found at ${startScript}`);
+      }
+      child = spawn(
+        "powershell",
+        ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", startScript],
+        {
+          cwd: repoRoot,
+          detached: true,
+          env: process.env,
+          stdio: ["ignore", logFd, logFd],
+        }
+      );
     }
+  } else {
+    log("LLM auto-start currently only supports Windows (start-llm.ps1). Run the Python server manually on this platform.");
+    fs.closeSync(logFd);
+    return null;
   }
-  return true;
+
+  fs.closeSync(logFd);
+  fs.writeFileSync(components.llm.pidFile, String(child.pid));
+  child.unref();
+
+  return { port, reused: false };
 }
 
-function showLocalIdeLogs() {
-  if (!fs.existsSync(localIdeLogPath)) {
-    fail("No local IDE log file was found yet.");
+function telegramBridgeReady(env) {
+  return Boolean((env.TELEGRAM_BOT_TOKEN || "").trim());
+}
+
+function pythonExecutable() {
+  const candidates =
+    process.platform === "win32"
+      ? [
+          path.join(projectDir, "llm-server", ".venv", "Scripts", "python.exe"),
+          "python.exe",
+          "python",
+        ]
+      : [
+          path.join(projectDir, "llm-server", ".venv", "bin", "python"),
+          "python3",
+          "python",
+        ];
+  for (const candidate of candidates) {
+    if (path.isAbsolute(candidate)) {
+      if (fs.existsSync(candidate)) return candidate;
+    } else if (commandExists(candidate, ["--version"])) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+async function startDetachedTelegramBridge(env, llmPort) {
+  if (!telegramBridgeReady(env)) {
+    log("Telegram bridge skipped (TELEGRAM_BOT_TOKEN not set in IPE/.env).");
+    return null;
+  }
+
+  const livePid = await reconcilePid(components.telegram);
+  if (livePid !== null) {
+    log(`Telegram bridge already running (PID ${livePid}). Reusing it.`);
+    return { reused: true };
+  }
+
+  const python = pythonExecutable();
+  if (!python) {
+    log("Telegram bridge skipped — could not locate python interpreter. Run `npm start` once first to create the venv.");
+    return null;
+  }
+
+  const bridgeScript = path.join(projectDir, "llm-server", "telegram_bridge.py");
+  if (!fs.existsSync(bridgeScript)) {
+    log(`Telegram bridge skipped — script missing at ${bridgeScript}.`);
+    return null;
+  }
+
+  const logFd = fs.openSync(components.telegram.logFile, "a");
+  const child = spawn(python, [bridgeScript], {
+    cwd: path.join(projectDir, "llm-server"),
+    detached: true,
+    env: {
+      ...process.env,
+      LLM_SERVER_URL: env.LLM_SERVER_URL || `http://127.0.0.1:${llmPort}`,
+      TELEGRAM_BOT_TOKEN: env.TELEGRAM_BOT_TOKEN || "",
+      TELEGRAM_ALLOWED_CHAT_IDS: env.TELEGRAM_ALLOWED_CHAT_IDS || "",
+      TELEGRAM_DEFAULT_MODE: env.TELEGRAM_DEFAULT_MODE || "chat",
+    },
+    stdio: ["ignore", logFd, logFd],
+  });
+
+  fs.closeSync(logFd);
+  fs.writeFileSync(components.telegram.pidFile, String(child.pid));
+  child.unref();
+  return { reused: false };
+}
+
+function showLogs(component) {
+  if (!fs.existsSync(component.logFile)) {
+    fail(`No log file found at ${component.logFile}.`);
   }
   if (process.platform === "win32") {
     const child = spawn(
       "powershell",
-      ["-NoLogo", "-NoProfile", "-Command", `Get-Content -Path '${localIdeLogPath}' -Wait`],
+      ["-NoLogo", "-NoProfile", "-Command", `Get-Content -Path '${component.logFile}' -Wait`],
       { stdio: "inherit" }
     );
     child.on("exit", (code) => process.exit(code ?? 0));
-    return true;
+    return;
   }
-  const child = spawn("tail", ["-f", localIdeLogPath], { stdio: "inherit" });
+  const child = spawn("tail", ["-f", component.logFile], { stdio: "inherit" });
   child.on("exit", (code) => process.exit(code ?? 0));
-  return true;
 }
 
 async function startProject() {
@@ -237,28 +450,271 @@ async function startProject() {
   }
 
   log("Starting local Theia IDE process...");
-  const idePort = startDetachedLocalIde(env, workspaceMount);
+  const { publicPort, idePort } = await startDetachedLocalIde(env, workspaceMount);
   log(`Waiting for the IDE on http://localhost:${idePort} ...`);
 
   try {
-    await waitForIde(idePort, 120000);
+    await waitForHttp(idePort, 120000);
   } catch (error) {
     fail(
       [
         error.message,
         "The local IDE process was started, but the browser UI is not reachable yet.",
-        `Check logs in ${path.relative(repoRoot, localIdeLogPath)} or run npm run logs.`,
+        `Check logs in ${path.relative(repoRoot, components.ide.logFile)} or run npm run logs.`,
       ].join("\n")
     );
   }
 
+  const llmStart = await startDetachedLlmServer(env);
+  if (llmStart) {
+    log(`Waiting for LLM server on http://localhost:${llmStart.port}/health ...`);
+    try {
+      await waitForHttp(llmStart.port, 180000, "/health");
+      log("LLM server is up.");
+    } catch (error) {
+      log(`LLM server did not respond in time: ${error.message}`);
+      log(`Check logs in ${path.relative(repoRoot, components.llm.logFile)} or run npm run logs:llm.`);
+    }
+  }
+
+  const telegram = await startDetachedTelegramBridge(env, llmStart ? llmStart.port : llmServerPort(env));
+  if (telegram && !telegram.reused) {
+    log("Telegram bridge launched. Send /start to your bot to test.");
+  }
+
+  log(`Starting local CORS proxy on port ${publicPort}...`);
+  if (process.platform === "win32") {
+    try {
+      spawnSync("powershell", ["-NoProfile", "-Command", `Get-Process -Id (Get-NetTCPConnection -LocalPort ${publicPort} -ErrorAction SilentlyContinue).OwningProcess -ErrorAction SilentlyContinue | Stop-Process -Force`]);
+    } catch (_error) {
+      // Best-effort cleanup; ignore.
+    }
+  } else {
+    try {
+      spawnSync("sh", ["-c", `lsof -t -i:${publicPort} | xargs kill -9`]);
+    } catch (_error) {
+      // Best-effort cleanup; ignore.
+    }
+  }
+
+  const llmTarget = `http://127.0.0.1:${llmStart ? llmStart.port : llmServerPort(env)}`;
+  const ideTarget = `http://127.0.0.1:${idePort}`;
+
+  // Routes that belong to the LLM FastAPI server. Everything else (including
+  // any other /api/* path Theia exposes) goes to Theia. Add new LLM routes
+  // here as the Python server grows.
+  const llmPathPrefixes = [
+    "/api/chat",
+    "/api/complete",
+    "/api/terminal",
+    "/api/refactor",
+    "/api/explain",
+    "/api/setup/",
+  ];
+  const isLlmRoute = (url) => {
+    if (!url) return false;
+    const path = url.split("?", 1)[0];
+    if (path === "/health") return true;
+    return llmPathPrefixes.some((prefix) => path === prefix || path.startsWith(prefix));
+  };
+
+  const proxy = httpProxy.createProxyServer({ ws: true });
+  proxy.on("error", (err, req, res) => {
+    if (!res || !res.writeHead) return;
+    const upstreamLabel = req && isLlmRoute(req.url) ? "LLM server" : "Theia";
+    res.writeHead(503, {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": (req && req.headers && req.headers.origin) || "*",
+      "Access-Control-Allow-Credentials": "true",
+    });
+    res.end(
+      JSON.stringify({
+        error: `${upstreamLabel} is not reachable`,
+        detail: err.message,
+        upstream: upstreamLabel,
+      })
+    );
+  });
+
+  const setCorsHeaders = (req, res) => {
+    const origin = req.headers.origin || "*";
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader(
+      "Access-Control-Allow-Methods",
+      "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+    );
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      req.headers["access-control-request-headers"] ||
+        "Content-Type, Authorization, X-Requested-With"
+    );
+    res.setHeader("Access-Control-Max-Age", "86400");
+  };
+
+  const server = http.createServer((req, res) => {
+    setCorsHeaders(req, res);
+    if (req.method === "OPTIONS") {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+    const target = isLlmRoute(req.url) ? llmTarget : ideTarget;
+    proxy.web(req, res, { target });
+  });
+
+  server.on("upgrade", (req, socket, head) => {
+    proxy.ws(req, socket, head, { target: ideTarget });
+  });
+
+  server.listen(publicPort, "0.0.0.0");
+
   log("");
   log("Gemma Theia IDE is running natively.");
-  log(`Desktop: http://localhost:${idePort}`);
-  log(`Mobile:  http://${getLocalIpAddress()}:${idePort}`);
+  log(`Desktop: http://localhost:${publicPort}`);
+  log(`Mobile:  http://${getLocalIpAddress()}:${publicPort}`);
   log(`Workspace: ${workspaceMount}`);
-  log(`Logs:    npm run logs (${path.relative(repoRoot, localIdeLogPath)})`);
+  log(`Logs:    npm run logs (IDE) | npm run logs:llm | npm run logs:telegram`);
   log("Stop:    npm run stop");
+
+  spawnDesktopWindow(env, publicPort);
+
+  log("Proxy is running in the foreground. Press Ctrl+C to stop the proxy (background services keep running).");
+}
+
+function findChromiumBrowser() {
+  if (process.platform === "win32") {
+    const candidates = [
+      "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+      "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+      `${process.env.LOCALAPPDATA || ""}\\Google\\Chrome\\Application\\chrome.exe`,
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+    ];
+    for (const candidate of candidates) {
+      if (candidate && fs.existsSync(candidate)) return candidate;
+    }
+  } else if (process.platform === "darwin") {
+    const candidates = [
+      "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  } else if (process.platform === "linux") {
+    const which = (cmd) => spawnSync("which", [cmd]).stdout.toString().trim();
+    for (const cmd of ["microsoft-edge", "google-chrome", "chromium", "chromium-browser"]) {
+      const found = which(cmd);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function spawnDesktopWindow(env, publicPort) {
+  if (!isTruthy(env.OPEN_WINDOW ?? "true")) {
+    log("Desktop window auto-launch disabled (OPEN_WINDOW=false).");
+    return;
+  }
+
+  const url = `http://localhost:${publicPort}/`;
+  const browser = findChromiumBrowser();
+
+  if (browser) {
+    const userDataDir = path.join(projectDir, ".window-profile");
+    fs.mkdirSync(userDataDir, { recursive: true });
+    const child = spawn(
+      browser,
+      [
+        `--app=${url}`,
+        `--user-data-dir=${userDataDir}`,
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--window-size=1400,900",
+      ],
+      { detached: true, stdio: "ignore" }
+    );
+    child.unref();
+    log(`Desktop window opened via ${path.basename(browser)}. Close any time; services keep running.`);
+    return;
+  }
+
+  if (process.platform === "win32") {
+    spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore" }).unref();
+    log(`Opened ${url} in your default browser (no Chromium-based browser found for app-mode window).`);
+    return;
+  }
+
+  log(`Open ${url} in a browser — no auto-launcher available for this platform.`);
+}
+
+async function openWindow() {
+  const env = ensureProjectFiles();
+  const publicPort = Number.parseInt(env.IDE_PORT || "3000", 10);
+
+  log(`Checking that the IDE is reachable on http://localhost:${publicPort} ...`);
+  try {
+    await waitForHttp(publicPort, 5000);
+  } catch (_error) {
+    fail(
+      [
+        `The IDE is not reachable on http://localhost:${publicPort}.`,
+        "Run `npm start` first to launch the Theia backend and proxy, then run `npm run window` in another terminal.",
+      ].join("\n")
+    );
+  }
+
+  spawnDesktopWindow({ ...env, OPEN_WINDOW: "true" }, publicPort);
+}
+
+function stopAll() {
+  let stoppedAny = false;
+  for (const key of ["telegram", "llm", "ide"]) {
+    const component = components[key];
+    if (stopComponent(component)) {
+      log(`Stopped ${component.label}.`);
+      stoppedAny = true;
+    }
+  }
+  if (!stoppedAny) {
+    log("No background services were running.");
+  }
+}
+
+async function bootstrapIPE() {
+  log("Running `yarn install --ignore-scripts` in IPE (auto-rebuilds disabled)...");
+  let result = spawnSync("corepack", ["yarn", "install", "--ignore-scripts"], {
+    cwd: projectDir,
+    stdio: "inherit",
+    shell: process.platform === "win32",
+  });
+  if (result.status !== 0) {
+    fail("yarn install failed.");
+  }
+
+  log("Applying patch-package patches...");
+  result = spawnSync("npx", ["patch-package"], {
+    cwd: projectDir,
+    stdio: "inherit",
+    shell: process.platform === "win32",
+  });
+  if (result.status !== 0) {
+    fail("patch-package failed.");
+  }
+
+  log("Rebuilding native modules with MSVC toolset...");
+  result = spawnSync("node", [path.join(projectDir, "scripts", "setup-native.js")], {
+    cwd: projectDir,
+    stdio: "inherit",
+    shell: process.platform === "win32",
+  });
+  if (result.status !== 0) {
+    fail("Native module rebuild failed.");
+  }
+
+  log("");
+  log("IPE bootstrapped. Run `npm start` to launch.");
 }
 
 async function main() {
@@ -268,18 +724,26 @@ async function main() {
       ensureProjectFiles();
       log("Project bootstrap files are ready.");
       return;
+    case "bootstrap":
+      await bootstrapIPE();
+      return;
     case "start":
       await startProject();
       return;
     case "stop":
-      if (stopLocalIde()) {
-        log("Stopped the local IDE process.");
-      } else {
-        log("No local IDE process is currently running.");
-      }
+      stopAll();
       return;
     case "logs":
-      showLocalIdeLogs();
+      showLogs(components.ide);
+      return;
+    case "logs:llm":
+      showLogs(components.llm);
+      return;
+    case "logs:telegram":
+      showLogs(components.telegram);
+      return;
+    case "window":
+      await openWindow();
       return;
     default:
       fail(`Unknown command: ${command}`);

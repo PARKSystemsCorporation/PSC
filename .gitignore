@@ -3,3 +3,21 @@ node_modules/
 src-gen/
 gen-webpack.*.config.js
 gen-webpack.config.js
+
+# Runtime state — created on `npm start`
+IPE/.local-ide.pid
+IPE/.local-ide.log
+IPE/.llm-server.pid
+IPE/.llm-server.log
+IPE/.telegram.pid
+IPE/.telegram.log
+IPE/.window-profile/
+
+# Legacy Neutralino artifacts (we use Edge/Chrome --app= for the desktop window now)
+IPE/applications/browser/bin/
+IPE/applications/browser/temp-neu/
+IPE/applications/browser/neutralino.config.json
+
+# npm lock — this workspace uses yarn
+package-lock.json
+IPE/package-lock.json

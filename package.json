@@ -4,11 +4,18 @@
   "description": "Root launcher for the Gemma Theia IDE workspace",
   "scripts": {
     "setup": "node scripts/project-cli.js setup",
+    "bootstrap": "node scripts/project-cli.js bootstrap",
     "start": "node scripts/project-cli.js start",
     "stop": "node scripts/project-cli.js stop",
-    "logs": "node scripts/project-cli.js logs"
+    "logs": "node scripts/project-cli.js logs",
+    "logs:llm": "node scripts/project-cli.js logs:llm",
+    "logs:telegram": "node scripts/project-cli.js logs:telegram",
+    "window": "node scripts/project-cli.js window"
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "http-proxy": "^1.18.1"
   }
 }
