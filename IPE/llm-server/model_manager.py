@@ -20,9 +20,23 @@ from huggingface_hub import hf_hub_download, snapshot_download
 
 MODELS_DIR = Path(os.environ.get("MODELS_DIR", "/models"))
 
-# Available Gemma 4 model variants
+# Available Gemma model variants
 GEMMA4_MODELS = {
     # GGUF models for llama.cpp
+    "gemma-2-2b-it-Q4_K_M": {
+        "repo": "bartowski/gemma-2-2b-it-GGUF",
+        "filename": "gemma-2-2b-it-Q4_K_M.gguf",
+        "format": "gguf",
+        "size_gb": 1.6,
+        "description": "Gemma 2 2B Instruct - Q4_K_M (fast, fits in 4GB VRAM)",
+    },
+    "gemma-2-9b-it-Q4_K_M": {
+        "repo": "bartowski/gemma-2-9b-it-GGUF",
+        "filename": "gemma-2-9b-it-Q4_K_M.gguf",
+        "format": "gguf",
+        "size_gb": 5.4,
+        "description": "Gemma 2 9B Instruct - Q4_K_M (recommended, needs ~7GB VRAM)",
+    },
     "gemma-4-4b-it-Q4_K_M": {
         "repo": "bartowski/gemma-4-4b-it-GGUF",
         "filename": "gemma-4-4b-it-Q4_K_M.gguf",

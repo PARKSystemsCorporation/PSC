@@ -405,6 +405,11 @@ def _build_setup_status(backend_ready: bool, personaplex_ready: bool) -> SetupSt
 
 
 def _get_model_name() -> str:
+    # Explicit override (set in IPE/.env as LLM_MODEL) wins for any backend.
+    # Use this for Ollama tags like "gemma3:4b" or "llama3.2:3b".
+    override = (_read_env_file().get("LLM_MODEL") or os.environ.get("LLM_MODEL") or "").strip()
+    if override:
+        return override
     if _get_desired_backend() == "vllm":
         return CONFIG["vllm"].get("model_name", "google/gemma-4-12b-it")
     return _get_desired_model_key()
