@@ -33,6 +33,54 @@ export namespace GemmaProtocol {
         max_tokens?: number;
         temperature?: number;
         stop?: string[];
+        /** Inject the tool-call protocol into the system prompt. */
+        agent_tools?: boolean;
+    }
+
+    /** Names of the tools the agent can invoke. */
+    export type AgentToolName = 'read_file' | 'list_dir' | 'write_file' | 'run_command';
+
+    /** Parsed tool call extracted from a streamed assistant message. */
+    export interface AgentToolCall {
+        name: AgentToolName | string;
+        args: Record<string, any>;
+    }
+
+    /** Result of executing a tool, fed back to the model as a synthetic message. */
+    export interface AgentToolResult {
+        name: string;
+        ok: boolean;
+        result?: any;
+        error?: string;
+    }
+
+    /** Markers wrapping a tool call in the streamed assistant text. */
+    export const TOOL_CALL_OPEN = '<<TOOL>>';
+    export const TOOL_CALL_CLOSE = '<<END>>';
+    export const TOOL_RESULT_OPEN = '<<TOOL_RESULT>>';
+
+    export interface ReadFileResult {
+        path: string;
+        content: string;
+        size: number;
+        truncated: boolean;
+    }
+
+    export interface WriteFileResult {
+        path: string;
+        bytes_written: number;
+        created: boolean;
+    }
+
+    export interface ListDirEntry {
+        name: string;
+        type: 'file' | 'dir';
+        size: number | null;
+    }
+
+    export interface ListDirResult {
+        path: string;
+        entries: ListDirEntry[];
     }
 
     /** Code completion request */
@@ -96,6 +144,36 @@ export namespace GemmaProtocol {
         backend: string;
         model: string;
         uptime: number;
+    }
+
+    /** A model already pulled and available locally via Ollama. */
+    export interface OllamaTag {
+        name: string;
+        size_gb: number;
+        modified_at?: string;
+        digest?: string;
+        active: boolean;
+    }
+
+    /** A curated quick-pick entry from /api/ollama/library. */
+    export interface OllamaLibraryEntry {
+        tag: string;
+        label: string;
+        description: string;
+        size_gb: number;
+    }
+
+    /** Background pull progress state from /api/ollama/pull/status. */
+    export interface OllamaPullStatus {
+        status: 'idle' | 'running' | 'success' | 'error';
+        model: string | null;
+        phase: string | null;
+        total: number;
+        completed: number;
+        percent: number;
+        error: string | null;
+        started_at: number | null;
+        finished_at: number | null;
     }
 
     /** Supported refactoring operations */

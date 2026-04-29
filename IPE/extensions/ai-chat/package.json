@@ -9,7 +9,10 @@
   "dependencies": {
     "@theia/core": "1.54.0",
     "@theia/editor": "1.54.0",
+    "@theia/filesystem": "1.54.0",
     "@theia/monaco": "1.54.0",
+    "@theia/terminal": "1.54.0",
+    "@theia/workspace": "1.54.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },

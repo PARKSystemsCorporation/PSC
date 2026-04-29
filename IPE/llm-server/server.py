@@ -64,6 +64,33 @@ download_state: dict[str, Any] = {
     "started_at": None,
     "finished_at": None,
 }
+ollama_pull_state: dict[str, Any] = {
+    "status": "idle",       # idle | running | success | error
+    "model": None,
+    "phase": None,          # "pulling manifest" | "downloading" | ...
+    "total": 0,
+    "completed": 0,
+    "percent": 0.0,
+    "error": None,
+    "started_at": None,
+    "finished_at": None,
+}
+
+# Curated quick-pick library shown in the model picker. These are common
+# coder/instruct tags that pull cleanly via Ollama and work with the OpenAI-
+# compat /v1/chat/completions endpoint we're already using. The frontend can
+# also pull arbitrary tags via a free-form input.
+OLLAMA_LIBRARY: list[dict[str, Any]] = [
+    {"tag": "qwen2.5-coder:7b",    "size_gb": 4.7, "label": "Qwen 2.5 Coder 7B",    "description": "Strong open-source coder, fits on 8GB GPUs."},
+    {"tag": "qwen2.5-coder:14b",   "size_gb": 9.0, "label": "Qwen 2.5 Coder 14B",   "description": "Bigger Qwen Coder, ~12GB VRAM."},
+    {"tag": "qwen2.5-coder:32b",   "size_gb": 20.0,"label": "Qwen 2.5 Coder 32B",   "description": "Top-tier Qwen Coder, needs 24GB+ VRAM."},
+    {"tag": "deepseek-coder-v2:16b","size_gb": 9.0,"label": "DeepSeek Coder v2 16B","description": "MoE coder model, balanced speed/quality."},
+    {"tag": "llama3.2:3b",         "size_gb": 2.0, "label": "Llama 3.2 3B",         "description": "Tiny, fast general-purpose chat."},
+    {"tag": "llama3.1:8b",         "size_gb": 4.7, "label": "Llama 3.1 8B",         "description": "Solid general-purpose 8B."},
+    {"tag": "gemma3:4b",           "size_gb": 3.3, "label": "Gemma 3 4B",           "description": "Default lightweight Gemma."},
+    {"tag": "gemma3:12b",          "size_gb": 8.1, "label": "Gemma 3 12B",          "description": "Bigger Gemma, ~12GB VRAM."},
+    {"tag": "phi3:14b",            "size_gb": 7.9, "label": "Phi 3 Medium 14B",     "description": "Microsoft Phi 3 Medium."},
+]
 
 
 @asynccontextmanager
@@ -114,6 +141,7 @@ class ChatRequest(BaseModel):
     temperature: Optional[float] = None
     top_p: Optional[float] = None
     stop: Optional[list[str]] = None
+    agent_tools: bool = Field(False, description="Inject the tool-call protocol into the system prompt")
 
 
 class CompletionRequest(BaseModel):
@@ -152,6 +180,22 @@ class RefactorRequest(BaseModel):
     language: str = Field("", description="Programming language")
     selection: Optional[str] = Field(None, description="Selected text for targeted refactoring")
     instructions: str = Field("", description="Additional refactoring instructions")
+
+
+class ReadFileRequest(BaseModel):
+    path: str = Field(..., description="Workspace-relative path to read")
+    max_bytes: int = Field(1_000_000, description="Maximum bytes to return; longer files are truncated")
+
+
+class WriteFileRequest(BaseModel):
+    path: str = Field(..., description="Workspace-relative path to write")
+    content: str = Field(..., description="Full new file contents (UTF-8)")
+    create_parents: bool = Field(True, description="Create parent directories if missing")
+
+
+class ListDirRequest(BaseModel):
+    path: str = Field("", description="Workspace-relative directory; empty for workspace root")
+    show_hidden: bool = Field(False, description="Include dotfiles")
 
 
 class HealthResponse(BaseModel):
@@ -282,6 +326,27 @@ def _resolve_execution_cwd(cwd: Optional[str] = None) -> Path:
 
     if not resolved.exists() or not resolved.is_dir():
         raise HTTPException(status_code=400, detail=f"Execution cwd does not exist: {resolved}")
+    return resolved
+
+
+def _resolve_workspace_path(path: str) -> Path:
+    """Resolve a tool-supplied path against PSC_TARGET_WORKSPACE.
+
+    Refuses absolute paths that escape the workspace, refuses traversal via
+    `..`, and refuses empty input. Used by the agent file tools.
+    """
+    if not path or not str(path).strip():
+        raise HTTPException(status_code=400, detail="path is required")
+
+    target = _get_target_workspace()
+    candidate = Path(str(path).strip())
+    resolved = candidate if candidate.is_absolute() else (target / candidate)
+    resolved = resolved.resolve()
+
+    try:
+        resolved.relative_to(target)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="path must stay inside PSC_TARGET_WORKSPACE") from error
     return resolved
 
 
@@ -510,7 +575,51 @@ def _get_memory_context(query: Optional[str] = None) -> str:
     return "\n\n".join(section for section in sections if section)
 
 
-def _build_system_prompt(mode: AgentMode, memory_context: str = "") -> str:
+AGENT_TOOLS_PROTOCOL = """
+You have access to tools that can read, write, list, and run code in the user's workspace.
+
+To call a tool, emit EXACTLY this format and then STOP generating — wait for the result before continuing:
+
+<<TOOL>>
+{"name": "<tool_name>", "args": { ... }}
+<<END>>
+
+After the tool runs, the result will be appended to the conversation as:
+
+<<TOOL_RESULT>>
+{"name": "<tool_name>", "ok": true, "result": ...}
+<<END>>
+
+(Or `"ok": false, "error": "..."` if it failed or the user denied it.)
+
+Available tools:
+
+- read_file({"path": "src/foo.py"})
+    Read a UTF-8 text file. Returns {content, size, truncated}. Path is relative to the workspace root.
+
+- list_dir({"path": "src"})
+    List entries in a directory. Returns {entries: [{name, type, size}]}. Use "" for the workspace root.
+
+- write_file({"path": "src/foo.py", "content": "..."})
+    Create or OVERWRITE a file with the full new contents. The user will see a diff and must approve.
+    Always read_file first before write_file unless creating a brand-new file. Provide the COMPLETE new
+    contents, not a partial diff or "// rest unchanged" placeholder.
+
+- run_command({"command": "pytest -k foo"})
+    Run a shell command in the workspace. The user will see the command and must approve. Returns
+    {exit_code, stdout, stderr}.
+
+Rules:
+1. Emit AT MOST ONE <<TOOL>> block per response, then stop. Do not narrate what you are about to do
+   in the same response — call the tool and wait.
+2. Use forward slashes in paths. Paths are workspace-relative.
+3. Read before you edit. Never blindly overwrite a file.
+4. When you are finished with the user's request, respond with normal markdown — no <<TOOL>> block.
+5. If a tool returns an error, read it and adapt. Do not repeat the same failing call.
+"""
+
+
+def _build_system_prompt(mode: AgentMode, memory_context: str = "", agent_tools: bool = False) -> str:
     agent_cfg = CONFIG.get("agent", {})
     target_workspace = _get_target_workspace()
     prompts = {
@@ -525,6 +634,8 @@ def _build_system_prompt(mode: AgentMode, memory_context: str = "") -> str:
         "PSC is the coding-agent IDE. The target workspace is the software project being edited. "
         "Do not confuse PSC with target projects such as Vestra or Lila."
     )
+    if agent_tools and mode == AgentMode.CHAT:
+        prompt = f"{prompt}\n\n{AGENT_TOOLS_PROTOCOL.strip()}"
     if memory_context:
         prompt = (
             f"{prompt}\n\n"
@@ -703,6 +814,177 @@ async def configure_local_model(request: LocalModelSetupRequest):
     return {"configured": True, "filename": target_name}
 
 
+# ---------------------------------------------------------------------------
+# Ollama model management
+# ---------------------------------------------------------------------------
+
+class OllamaPullRequest(BaseModel):
+    name: str = Field(..., description="Ollama tag, e.g. 'qwen2.5-coder:7b'")
+
+
+class OllamaSelectRequest(BaseModel):
+    name: str = Field(..., description="Ollama tag to mark as the active LLM")
+
+
+def _ollama_base_url() -> str:
+    """Base URL for the Ollama daemon. Reuses the configured llamacpp URL since
+    Ollama serves the OpenAI-compat API at the same host:port."""
+    return CONFIG["llamacpp"]["server_url"].rstrip("/")
+
+
+@app.get("/api/ollama/library")
+async def ollama_library():
+    """Curated quick-pick list of Ollama tags shown in the model picker."""
+    return {"models": OLLAMA_LIBRARY}
+
+
+@app.get("/api/ollama/tags")
+async def ollama_tags():
+    """List models that are already pulled locally via Ollama."""
+    url = f"{_ollama_base_url()}/api/tags"
+    try:
+        resp = await http_client.get(url, timeout=10.0)
+    except Exception as error:
+        raise HTTPException(status_code=503, detail=f"Ollama unreachable: {error}") from error
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+    payload = resp.json()
+    active = (_read_env_file().get("LLM_MODEL") or os.environ.get("LLM_MODEL") or "").strip()
+    models = []
+    for entry in payload.get("models", []):
+        name = entry.get("name") or entry.get("model")
+        if not name:
+            continue
+        size_bytes = entry.get("size") or 0
+        models.append({
+            "name": name,
+            "size_gb": round(size_bytes / (1024 ** 3), 2) if size_bytes else 0.0,
+            "modified_at": entry.get("modified_at"),
+            "digest": entry.get("digest"),
+            "active": name == active,
+        })
+    return {"models": models, "active": active}
+
+
+@app.get("/api/ollama/pull/status")
+async def ollama_pull_status():
+    """Current state of an in-progress or completed Ollama pull."""
+    return ollama_pull_state
+
+
+@app.post("/api/ollama/pull")
+async def ollama_pull(request: OllamaPullRequest):
+    """Kick off a background `ollama pull <name>`. Progress is reported via
+    /api/ollama/pull/status. Returns immediately — poll the status endpoint."""
+    name = request.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Model name is required")
+
+    if ollama_pull_state["status"] == "running":
+        raise HTTPException(
+            status_code=409,
+            detail=f"A pull for '{ollama_pull_state['model']}' is already running",
+        )
+
+    ollama_pull_state.update({
+        "status": "running",
+        "model": name,
+        "phase": "starting",
+        "total": 0,
+        "completed": 0,
+        "percent": 0.0,
+        "error": None,
+        "started_at": time.time(),
+        "finished_at": None,
+    })
+
+    async def run_pull() -> None:
+        url = f"{_ollama_base_url()}/api/pull"
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream("POST", url, json={"name": name, "stream": True}) as resp:
+                    if resp.status_code != 200:
+                        body = await resp.aread()
+                        raise RuntimeError(f"Ollama returned {resp.status_code}: {body.decode(errors='ignore')}")
+
+                    async for line in resp.aiter_lines():
+                        if not line:
+                            continue
+                        try:
+                            chunk = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+
+                        if "error" in chunk:
+                            raise RuntimeError(chunk["error"])
+
+                        phase = chunk.get("status", "")
+                        total = int(chunk.get("total") or 0)
+                        completed = int(chunk.get("completed") or 0)
+                        percent = round((completed / total) * 100, 1) if total else ollama_pull_state["percent"]
+
+                        ollama_pull_state.update({
+                            "phase": phase,
+                            "total": total or ollama_pull_state["total"],
+                            "completed": completed or ollama_pull_state["completed"],
+                            "percent": percent,
+                        })
+
+                        if phase == "success":
+                            break
+
+            ollama_pull_state.update({
+                "status": "success",
+                "phase": "success",
+                "percent": 100.0,
+                "error": None,
+                "finished_at": time.time(),
+            })
+        except Exception as error:
+            ollama_pull_state.update({
+                "status": "error",
+                "error": str(error),
+                "finished_at": time.time(),
+            })
+
+    asyncio.create_task(run_pull())
+    return {"accepted": True, "model": name}
+
+
+@app.post("/api/ollama/select")
+async def ollama_select(request: OllamaSelectRequest):
+    """Set the active model. Writes LLM_MODEL into IPE/.env. No restart needed:
+    /api/chat re-reads the env file on every request."""
+    name = request.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Model name is required")
+
+    # Verify the tag actually exists locally so we don't quietly point at a
+    # missing model. Skip verification if Ollama is unreachable — let the next
+    # /api/chat call surface that.
+    try:
+        resp = await http_client.get(f"{_ollama_base_url()}/api/tags", timeout=5.0)
+        if resp.status_code == 200:
+            installed = {(m.get("name") or m.get("model")) for m in resp.json().get("models", [])}
+            if name not in installed:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"'{name}' is not pulled. POST /api/ollama/pull first.",
+                )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+    _write_env_updates({
+        "LLM_BACKEND": "llamacpp",
+        "LLM_MODEL": name,
+    })
+    return {"selected": name}
+
+
 @app.post("/api/setup/upload-local-model")
 async def upload_local_model(file: UploadFile = File(...)):
     filename = Path(file.filename or "").name
@@ -735,7 +1017,7 @@ async def chat(request: ChatRequest):
     """Multi-turn chat with the AI agent — supports streaming via SSE."""
     message_dicts = [m.model_dump() for m in request.messages]
     memory_context = _get_memory_context(_latest_user_message(message_dicts))
-    system_prompt = _build_system_prompt(request.mode, memory_context)
+    system_prompt = _build_system_prompt(request.mode, memory_context, agent_tools=request.agent_tools)
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(message_dicts)
 
@@ -863,6 +1145,102 @@ async def execute_command(request: ExecuteRequest):
             stderr=error.stderr or f"Command timed out after {timeout} seconds",
             timed_out=True,
         )
+
+
+# ---------------------------------------------------------------------------
+# Agent file tools — read_file / write_file / list_dir
+# ---------------------------------------------------------------------------
+
+@app.post("/api/fs/read")
+async def fs_read(request: ReadFileRequest):
+    """Read a UTF-8 text file inside PSC_TARGET_WORKSPACE for the agent loop."""
+    resolved = _resolve_workspace_path(request.path)
+    if not resolved.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {request.path}")
+    if not resolved.is_file():
+        raise HTTPException(status_code=400, detail=f"Not a regular file: {request.path}")
+
+    size = resolved.stat().st_size
+    max_bytes = max(1, min(int(request.max_bytes or 1_000_000), 5_000_000))
+    truncated = size > max_bytes
+
+    try:
+        with resolved.open("rb") as fh:
+            data = fh.read(max_bytes)
+    except OSError as error:
+        raise HTTPException(status_code=500, detail=f"Read failed: {error}") from error
+
+    try:
+        content = data.decode("utf-8")
+    except UnicodeDecodeError:
+        content = data.decode("utf-8", errors="replace")
+
+    target = _get_target_workspace()
+    return {
+        "path": str(resolved.relative_to(target)).replace("\\", "/"),
+        "content": content,
+        "size": size,
+        "truncated": truncated,
+    }
+
+
+@app.post("/api/fs/write")
+async def fs_write(request: WriteFileRequest):
+    """Create or overwrite a UTF-8 text file inside PSC_TARGET_WORKSPACE."""
+    resolved = _resolve_workspace_path(request.path)
+    created = not resolved.exists()
+
+    if request.create_parents:
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+    elif not resolved.parent.exists():
+        raise HTTPException(status_code=400, detail=f"Parent directory does not exist: {resolved.parent}")
+
+    try:
+        resolved.write_text(request.content, encoding="utf-8")
+    except OSError as error:
+        raise HTTPException(status_code=500, detail=f"Write failed: {error}") from error
+
+    target = _get_target_workspace()
+    return {
+        "path": str(resolved.relative_to(target)).replace("\\", "/"),
+        "bytes_written": len(request.content.encode("utf-8")),
+        "created": created,
+    }
+
+
+@app.post("/api/fs/list")
+async def fs_list(request: ListDirRequest):
+    """List entries in a directory inside PSC_TARGET_WORKSPACE."""
+    target = _get_target_workspace()
+    if not request.path:
+        resolved = target
+    else:
+        resolved = _resolve_workspace_path(request.path)
+
+    if not resolved.exists():
+        raise HTTPException(status_code=404, detail=f"Directory not found: {request.path or '.'}")
+    if not resolved.is_dir():
+        raise HTTPException(status_code=400, detail=f"Not a directory: {request.path or '.'}")
+
+    entries = []
+    for child in sorted(resolved.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
+        if not request.show_hidden and child.name.startswith("."):
+            continue
+        try:
+            stat = child.stat()
+            size = stat.st_size if child.is_file() else None
+        except OSError:
+            size = None
+        entries.append({
+            "name": child.name,
+            "type": "dir" if child.is_dir() else "file",
+            "size": size,
+        })
+
+    return {
+        "path": str(resolved.relative_to(target)).replace("\\", "/") or ".",
+        "entries": entries,
+    }
 
 
 @app.post("/api/refactor")

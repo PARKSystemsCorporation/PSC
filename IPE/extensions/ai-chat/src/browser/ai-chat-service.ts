@@ -67,6 +67,7 @@ export class AiChatService {
         onChunk: (content: string) => void,
         onDone: () => void,
         onError: (error: Error) => void,
+        options: { agentTools?: boolean } = {},
     ): Promise<AbortController> {
         const controller = new AbortController();
 
@@ -74,6 +75,7 @@ export class AiChatService {
             messages,
             mode,
             stream: true,
+            agent_tools: options.agentTools,
         };
 
         try {
@@ -226,6 +228,116 @@ export class AiChatService {
             throw new Error(`Execution error: ${resp.status} ${detail}`);
         }
 
+        return await resp.json();
+    }
+
+    // ---- Agent file tools ----------------------------------------------
+
+    async readFile(path: string, maxBytes?: number): Promise<GemmaProtocol.ReadFileResult> {
+        const resp = await fetch(`${this._serverUrl}/api/fs/read`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path, max_bytes: maxBytes }),
+        });
+        if (!resp.ok) {
+            throw new Error(await this.errorBody(resp, 'read_file'));
+        }
+        return await resp.json();
+    }
+
+    async writeFile(path: string, content: string): Promise<GemmaProtocol.WriteFileResult> {
+        const resp = await fetch(`${this._serverUrl}/api/fs/write`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path, content }),
+        });
+        if (!resp.ok) {
+            throw new Error(await this.errorBody(resp, 'write_file'));
+        }
+        return await resp.json();
+    }
+
+    async listDir(path: string = ''): Promise<GemmaProtocol.ListDirResult> {
+        const resp = await fetch(`${this._serverUrl}/api/fs/list`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path }),
+        });
+        if (!resp.ok) {
+            throw new Error(await this.errorBody(resp, 'list_dir'));
+        }
+        return await resp.json();
+    }
+
+    private async errorBody(resp: Response, label: string): Promise<string> {
+        try {
+            const data = await resp.json();
+            return `${label} failed (${resp.status}): ${data.detail || resp.statusText}`;
+        } catch {
+            return `${label} failed (${resp.status}): ${resp.statusText}`;
+        }
+    }
+
+    /**
+     * List Ollama tags already pulled locally.
+     */
+    async ollamaTags(): Promise<{ models: GemmaProtocol.OllamaTag[]; active: string }> {
+        const resp = await fetch(`${this._serverUrl}/api/ollama/tags`);
+        if (!resp.ok) {
+            throw new Error(`Ollama tags error: ${resp.status}`);
+        }
+        return await resp.json();
+    }
+
+    /**
+     * Curated quick-pick library of Ollama tags worth pulling.
+     */
+    async ollamaLibrary(): Promise<{ models: GemmaProtocol.OllamaLibraryEntry[] }> {
+        const resp = await fetch(`${this._serverUrl}/api/ollama/library`);
+        if (!resp.ok) {
+            throw new Error(`Ollama library error: ${resp.status}`);
+        }
+        return await resp.json();
+    }
+
+    /**
+     * Kick off a background `ollama pull <name>`. Poll ollamaPullStatus for progress.
+     */
+    async ollamaPull(name: string): Promise<{ accepted: boolean; model: string }> {
+        const resp = await fetch(`${this._serverUrl}/api/ollama/pull`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name }),
+        });
+        if (!resp.ok) {
+            const text = await resp.text();
+            throw new Error(`Pull error: ${resp.status} ${text}`);
+        }
+        return await resp.json();
+    }
+
+    async ollamaPullStatus(): Promise<GemmaProtocol.OllamaPullStatus> {
+        const resp = await fetch(`${this._serverUrl}/api/ollama/pull/status`);
+        if (!resp.ok) {
+            throw new Error(`Pull status error: ${resp.status}`);
+        }
+        return await resp.json();
+    }
+
+    /**
+     * Switch the active model. Takes effect on the next /api/chat call —
+     * no server restart required.
+     */
+    async ollamaSelect(name: string): Promise<{ selected: string }> {
+        const resp = await fetch(`${this._serverUrl}/api/ollama/select`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name }),
+        });
+        if (!resp.ok) {
+            const text = await resp.text();
+            throw new Error(`Select error: ${resp.status} ${text}`);
+        }
         return await resp.json();
     }
 
