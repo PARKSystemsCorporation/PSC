@@ -271,7 +271,7 @@ function llmServerPort(env) {
   return Number.parseInt(env.LLM_SERVER_PORT || "8000", 10);
 }
 
-async function startDetachedLlmServer(env) {
+async function startDetachedLlmServer(env, workspaceMount) {
   if (!isTruthy(env.START_LLM_SERVER ?? "true")) {
     log("LLM server auto-start disabled (START_LLM_SERVER=false). Skipping.");
     return null;
@@ -308,6 +308,7 @@ async function startDetachedLlmServer(env) {
             CONFIG_PATH: path.join(llmServerDir, "config.yaml"),
             ENV_FILE: envPath,
             PROJECT_DIR: repoRoot,
+            PSC_TARGET_WORKSPACE: resolvePathFromProject(env.PSC_TARGET_WORKSPACE, workspaceMount),
             PYTHONUNBUFFERED: "1",
           },
           stdio: ["ignore", logFd, logFd],
@@ -465,7 +466,7 @@ async function startProject() {
     );
   }
 
-  const llmStart = await startDetachedLlmServer(env);
+  const llmStart = await startDetachedLlmServer(env, workspaceMount);
   if (llmStart) {
     log(`Waiting for LLM server on http://localhost:${llmStart.port}/health ...`);
     try {
@@ -507,6 +508,8 @@ async function startProject() {
     "/api/chat",
     "/api/complete",
     "/api/terminal",
+    "/api/execute",
+    "/api/workspace",
     "/api/refactor",
     "/api/explain",
     "/api/setup/",

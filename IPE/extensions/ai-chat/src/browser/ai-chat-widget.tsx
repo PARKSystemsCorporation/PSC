@@ -93,21 +93,16 @@ export class AiChatWidget extends ReactWidget {
         this.update();
         this.scrollToBottom();
 
-        // Build message history for the API
+        // Build message history for the API. The current user message is
+        // wrapped below with IDE context, so keep only earlier conversation.
         const apiMessages: GemmaProtocol.Message[] = this.messages
-            .filter(m => !m.isStreaming)
+            .filter(m => !m.isStreaming && m.id !== userMsg.id)
             .map(m => ({ role: m.role, content: m.content }));
 
-        // Add context from current editor if available
-        const editorContext = this.getEditorContext();
-        if (editorContext) {
-            apiMessages.push({
-                role: 'user',
-                content: `[Editor context - ${editorContext.language}]\n\`\`\`${editorContext.language}\n${editorContext.code}\n\`\`\`\n\n${text}`,
-            });
-        } else {
-            apiMessages.push({ role: 'user', content: text });
-        }
+        apiMessages.push({
+            role: 'user',
+            content: this.buildIdeAwarePrompt(text),
+        });
 
         try {
             this.abortController = await this.chatService.streamChat(
@@ -159,28 +154,59 @@ export class AiChatWidget extends ReactWidget {
         this.update();
     }
 
-    private getEditorContext(): { code: string; language: string } | null {
+    private buildIdeAwarePrompt(userRequest: string): string {
+        const editorContext = this.getEditorContext();
+        const contextLines = [
+            '[Gemma IDE request]',
+            'You are running inside Gemma Theia IDE, a VS Code-style coding workspace with an AI chat sidebar, editor integration, inline completion, refactoring, and a terminal agent panel.',
+            'Treat the active editor context below as live IDE context, not as a user-authored prompt.',
+            `Browser location: ${window.location.href}`,
+        ];
+
+        if (!editorContext) {
+            return `${contextLines.join('\n')}\n\nUser request:\n${userRequest}`;
+        }
+
+        const selectionSummary = editorContext.hasSelection
+            ? `Selected range: ${editorContext.selectionRange}`
+            : 'Selected range: none; showing the start of the active file';
+
+        return [
+            ...contextLines,
+            `Active file: ${editorContext.uri}`,
+            `Language: ${editorContext.language}`,
+            selectionSummary,
+            '',
+            `Active editor context:\n\`\`\`${editorContext.language}\n${editorContext.code}\n\`\`\``,
+            '',
+            `User request:\n${userRequest}`,
+        ].join('\n');
+    }
+
+    private getEditorContext(): { code: string; language: string; uri: string; hasSelection: boolean; selectionRange: string } | null {
         const editor = this.editorManager.currentEditor;
         if (!editor) return null;
 
         const model = editor.editor.document;
         const selection = editor.editor.selection;
         const language = model.languageId || 'text';
+        const uri = model.uri.toString();
 
         if (selection) {
             const startOffset = model.offsetAt(selection.start);
             const endOffset = model.offsetAt(selection.end);
             if (startOffset !== endOffset) {
                 const selectedText = model.getText().substring(startOffset, endOffset);
-                return { code: selectedText, language };
+                const selectionRange = `${selection.start.line + 1}:${selection.start.character + 1}-${selection.end.line + 1}:${selection.end.character + 1}`;
+                return { code: selectedText, language, uri, hasSelection: true, selectionRange };
             }
         }
 
-        // If no selection, use visible portion or first 100 lines
+        // If no selection, use the first 160 lines as ambient file context.
         const fullText = model.getText();
         const lines = fullText.split('\n');
-        const code = lines.slice(0, 100).join('\n');
-        return { code, language };
+        const code = lines.slice(0, 160).join('\n');
+        return { code, language, uri, hasSelection: false, selectionRange: 'none' };
     }
 
     private scrollToBottom(): void {

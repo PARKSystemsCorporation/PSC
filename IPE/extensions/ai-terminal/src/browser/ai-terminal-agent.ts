@@ -58,6 +58,14 @@ export class AiTerminalAgent {
         this.autoExecute = value;
     }
 
+    async getWorkspaceStatus(): Promise<GemmaProtocol.WorkspaceStatus> {
+        return this.chatService.workspaceStatus();
+    }
+
+    async executeCommand(command: string): Promise<GemmaProtocol.ExecuteResponse> {
+        return this.chatService.execute({ command, timeout: 120 });
+    }
+
     /**
      * Create a new agent plan from a task description.
      */
@@ -72,9 +80,13 @@ export class AiTerminalAgent {
         };
         this.onPlanUpdateEmitter.fire(this.plan);
 
+        const workspace = await this.getWorkspaceStatus();
+
         // Ask the AI to generate a step-by-step plan
         const planPrompt = `Task: ${task}
 
+PSC target workspace: ${workspace.target_workspace}
+Workspace exists: ${workspace.exists && workspace.is_directory ? 'yes' : 'no'}
 ${context ? `Context: ${context}\n` : ''}
 Please create a step-by-step plan to accomplish this task.
 For each step, provide:
@@ -85,6 +97,8 @@ Format each step as:
 STEP: <description>
 CMD: <command>
 
+Commands execute offline on the local machine from the PSC target workspace.
+Use PowerShell-compatible commands on Windows. Prefer inspect-before-edit commands.
 Only include necessary steps. Be concise.`;
 
         let response = '';

@@ -57,6 +57,30 @@ export namespace GemmaProtocol {
         stream: boolean;
     }
 
+    /** Terminal command execution request */
+    export interface ExecuteRequest {
+        command: string;
+        cwd?: string;
+        timeout?: number;
+    }
+
+    /** Terminal command execution response */
+    export interface ExecuteResponse {
+        command: string;
+        cwd: string;
+        exit_code: number;
+        stdout: string;
+        stderr: string;
+        timed_out: boolean;
+    }
+
+    /** PSC target workspace status */
+    export interface WorkspaceStatus {
+        target_workspace: string;
+        exists: boolean;
+        is_directory: boolean;
+    }
+
     /** Refactor request */
     export interface RefactorRequest {
         code: string;

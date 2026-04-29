@@ -45,13 +45,21 @@ export class AiTerminalWidget extends ReactWidget {
         });
 
         // Handle command execution requests
-        this.agent.onCommandRequest(({ step, callback }) => {
-            // In a real implementation, this would create a terminal and execute the command
-            // For now, we simulate by logging and calling back
+        this.agent.onCommandRequest(async ({ step, callback }) => {
             this.logs.push(`[Exec] $ ${step.command}`);
             this.update();
-            // The actual terminal integration would go here
-            setTimeout(() => callback('Command queued for execution'), 100);
+            try {
+                const result = await this.agent.executeCommand(step.command);
+                const output = [
+                    `cwd: ${result.cwd}`,
+                    `exit: ${result.exit_code}`,
+                    result.stdout ? `stdout:\n${result.stdout}` : '',
+                    result.stderr ? `stderr:\n${result.stderr}` : '',
+                ].filter(Boolean).join('\n');
+                callback(output);
+            } catch (error: any) {
+                callback(`Execution failed: ${error.message}`);
+            }
         });
 
         this.update();

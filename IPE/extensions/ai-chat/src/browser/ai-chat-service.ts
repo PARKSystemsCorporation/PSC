@@ -200,6 +200,35 @@ export class AiChatService {
         return data.explanation;
     }
 
+    /**
+     * Get the currently configured PSC target workspace.
+     */
+    async workspaceStatus(): Promise<GemmaProtocol.WorkspaceStatus> {
+        const resp = await fetch(`${this._serverUrl}/api/workspace`);
+        if (!resp.ok) {
+            throw new Error(`Workspace status error: ${resp.status}`);
+        }
+        return await resp.json();
+    }
+
+    /**
+     * Execute a local command in the PSC target workspace.
+     */
+    async execute(request: GemmaProtocol.ExecuteRequest): Promise<GemmaProtocol.ExecuteResponse> {
+        const resp = await fetch(`${this._serverUrl}/api/execute`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(request),
+        });
+
+        if (!resp.ok) {
+            const detail = await resp.text();
+            throw new Error(`Execution error: ${resp.status} ${detail}`);
+        }
+
+        return await resp.json();
+    }
+
     dispose(): void {
         this.onStreamChunkEmitter.dispose();
         this.onConnectionChangeEmitter.dispose();

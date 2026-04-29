@@ -131,6 +131,21 @@ class TerminalRequest(BaseModel):
     stream: bool = True
 
 
+class ExecuteRequest(BaseModel):
+    command: str = Field(..., description="Shell command to execute")
+    cwd: Optional[str] = Field(None, description="Optional working directory inside the target workspace")
+    timeout: int = Field(120, description="Timeout in seconds")
+
+
+class ExecuteResponse(BaseModel):
+    command: str
+    cwd: str
+    exit_code: int
+    stdout: str
+    stderr: str
+    timed_out: bool = False
+
+
 class RefactorRequest(BaseModel):
     code: str = Field(..., description="Code to refactor")
     operation: str = Field(..., description="Refactor operation name")
@@ -237,6 +252,37 @@ def _resolve_project_path(value: str, default: str) -> Path:
     raw_value = value.strip() if value else default
     target = Path(raw_value)
     return target if target.is_absolute() else (PROJECT_DIR / target).resolve()
+
+
+def _get_target_workspace() -> Path:
+    env_values = _read_env_file()
+    env_target = env_values.get("PSC_TARGET_WORKSPACE")
+    if env_target:
+        target = Path(env_target.strip())
+        return (target if target.is_absolute() else (ENV_FILE.parent / target)).resolve()
+
+    process_target = os.environ.get("PSC_TARGET_WORKSPACE") or os.environ.get("HOST_WORKSPACE")
+    if process_target:
+        target = Path(process_target.strip())
+        return (target if target.is_absolute() else (PROJECT_DIR / target)).resolve()
+
+    return PROJECT_DIR.resolve()
+
+
+def _resolve_execution_cwd(cwd: Optional[str] = None) -> Path:
+    target_workspace = _get_target_workspace()
+    requested = Path(cwd.strip()) if cwd and cwd.strip() else target_workspace
+    resolved = requested if requested.is_absolute() else (target_workspace / requested)
+    resolved = resolved.resolve()
+
+    try:
+        resolved.relative_to(target_workspace)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Execution cwd must stay inside PSC_TARGET_WORKSPACE") from error
+
+    if not resolved.exists() or not resolved.is_dir():
+        raise HTTPException(status_code=400, detail=f"Execution cwd does not exist: {resolved}")
+    return resolved
 
 
 def _is_mempalace_enabled() -> bool:
@@ -466,13 +512,19 @@ def _get_memory_context(query: Optional[str] = None) -> str:
 
 def _build_system_prompt(mode: AgentMode, memory_context: str = "") -> str:
     agent_cfg = CONFIG.get("agent", {})
+    target_workspace = _get_target_workspace()
     prompts = {
         AgentMode.CHAT: agent_cfg.get("chat_system_prompt", "You are a coding assistant."),
         AgentMode.COMPLETION: agent_cfg.get("completion_system_prompt", "Complete the code."),
         AgentMode.TERMINAL: agent_cfg.get("terminal_system_prompt", "You are a terminal agent."),
         AgentMode.REFACTOR: "You are an expert code refactoring assistant. Return ONLY the refactored code.",
     }
-    prompt = prompts.get(mode, prompts[AgentMode.CHAT])
+    prompt = (
+        f"{prompts.get(mode, prompts[AgentMode.CHAT])}\n\n"
+        f"PSC target workspace: {target_workspace}\n"
+        "PSC is the coding-agent IDE. The target workspace is the software project being edited. "
+        "Do not confuse PSC with target projects such as Vestra or Lila."
+    )
     if memory_context:
         prompt = (
             f"{prompt}\n\n"
@@ -504,16 +556,18 @@ async def _stream_backend(payload: dict) -> AsyncIterator[str]:
             if line.startswith("data: "):
                 data = line[6:]
                 if data.strip() == "[DONE]":
-                    yield "data: [DONE]\n\n"
+                    yield "[DONE]"
                     return
                 try:
                     chunk = json.loads(data)
                     delta = chunk.get("choices", [{}])[0].get("delta", {})
                     content = delta.get("content", "")
                     if content:
-                        yield f"data: {json.dumps({'content': content})}\n\n"
+                        yield json.dumps({"content": content})
                 except json.JSONDecodeError:
                     continue
+
+    yield "[DONE]"
 
 
 async def _complete_backend(payload: dict) -> str:
@@ -541,6 +595,9 @@ async def health_check():
     try:
         resp = await http_client.get(f"{_get_backend_url()}/health", timeout=5.0)
         backend_ok = resp.status_code == 200
+        if not backend_ok and _get_backend_url().rstrip("/").endswith(":11434"):
+            resp = await http_client.get(f"{_get_backend_url()}/api/tags", timeout=5.0)
+            backend_ok = resp.status_code == 200
     except Exception:
         pass
 
@@ -559,6 +616,9 @@ async def setup_status():
     try:
         resp = await http_client.get(f"{_get_backend_url()}/health", timeout=5.0)
         backend_ok = resp.status_code == 200
+        if not backend_ok and _get_backend_url().rstrip("/").endswith(":11434"):
+            resp = await http_client.get(f"{_get_backend_url()}/api/tags", timeout=5.0)
+            backend_ok = resp.status_code == 200
     except Exception:
         pass
     if _is_truthy(_read_env_file().get("PERSONAPLEX_ENABLED", "false")):
@@ -743,6 +803,66 @@ async def terminal_agent(request: TerminalRequest):
 
     content = await _complete_backend(payload)
     return {"content": content}
+
+
+@app.get("/api/workspace")
+async def workspace_status():
+    """Return the PSC target workspace used for local coding tasks."""
+    target_workspace = _get_target_workspace()
+    return {
+        "target_workspace": str(target_workspace),
+        "exists": target_workspace.exists(),
+        "is_directory": target_workspace.is_dir(),
+    }
+
+
+@app.post("/api/execute", response_model=ExecuteResponse)
+async def execute_command(request: ExecuteRequest):
+    """Execute a local shell command inside the PSC target workspace."""
+    command = request.command.strip()
+    if not command:
+        raise HTTPException(status_code=400, detail="Command is required")
+
+    cwd = _resolve_execution_cwd(request.cwd)
+    timeout = max(1, min(request.timeout, 600))
+
+    if os.name == "nt":
+        shell_command = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            command,
+        ]
+    else:
+        shell_command = ["/bin/sh", "-lc", command]
+
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            shell_command,
+            cwd=str(cwd),
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+        )
+        return ExecuteResponse(
+            command=command,
+            cwd=str(cwd),
+            exit_code=result.returncode,
+            stdout=result.stdout,
+            stderr=result.stderr,
+        )
+    except subprocess.TimeoutExpired as error:
+        return ExecuteResponse(
+            command=command,
+            cwd=str(cwd),
+            exit_code=124,
+            stdout=error.stdout or "",
+            stderr=error.stderr or f"Command timed out after {timeout} seconds",
+            timed_out=True,
+        )
 
 
 @app.post("/api/refactor")
