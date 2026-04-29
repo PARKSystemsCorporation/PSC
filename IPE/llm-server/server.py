@@ -8,8 +8,10 @@ providing a unified OpenAI-compatible API for the Theia IDE extensions.
 import asyncio
 import json
 import os
+import shlex
 import shutil
 import subprocess
+import sys
 import time
 from contextlib import asynccontextmanager
 from enum import Enum
@@ -169,6 +171,24 @@ class ExecuteRequest(BaseModel):
 
 
 class ExecuteResponse(BaseModel):
+    command: str
+    cwd: str
+    exit_code: int
+    stdout: str
+    stderr: str
+    timed_out: bool = False
+
+
+class AgentTaskRequest(BaseModel):
+    task: str = Field(..., description="Natural-language coding task")
+    engine: str = Field("ra-aid", description="Agent engine: ra-aid or aider")
+    cwd: Optional[str] = Field(None, description="Optional working directory inside the target workspace")
+    timeout: int = Field(1800, description="Timeout in seconds")
+    use_aider: bool = Field(True, description="For RA.Aid, delegate implementation edits to aider")
+
+
+class AgentTaskResponse(BaseModel):
+    engine: str
     command: str
     cwd: str
     exit_code: int
@@ -529,6 +549,78 @@ def _get_model_name() -> str:
     return _get_desired_model_key()
 
 
+def _agent_subprocess_env() -> dict[str, str]:
+    env_values = _read_env_file()
+    model = _get_model_name()
+    return {
+        **os.environ,
+        "OLLAMA_BASE_URL": env_values.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
+        "AIDER_MODEL": env_values.get("AIDER_MODEL", f"ollama_chat/{model}"),
+        "AIDER_YES_ALWAYS": "true",
+        "PYTHONUNBUFFERED": "1",
+    }
+
+
+def _agent_shell_command(args: list[str]) -> list[str]:
+    quoted = subprocess.list2cmdline(args) if os.name == "nt" else " ".join(shlex.quote(arg) for arg in args)
+    if os.name == "nt":
+        return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", quoted]
+    return ["/bin/sh", "-lc", quoted]
+
+
+def _agent_executable(name: str) -> str:
+    suffix = ".exe" if os.name == "nt" else ""
+    candidate = Path(sys.executable).parent / f"{name}{suffix}"
+    if candidate.exists():
+        return str(candidate)
+    found = shutil.which(name)
+    return found or name
+
+
+def _build_agent_command(request: AgentTaskRequest) -> tuple[str, list[str]]:
+    task = request.task.strip()
+    if not task:
+        raise HTTPException(status_code=400, detail="Task is required")
+
+    model = _get_model_name()
+    engine = request.engine.strip().lower()
+    if engine in {"ra", "raid", "ra.aid", "ra-aid"}:
+        args = [
+            _agent_executable("ra-aid"),
+            "--provider",
+            "ollama",
+            "--model",
+            model,
+            "--num-ctx",
+            str(int(_read_env_file().get("CTX_SIZE", "8192") or "8192")),
+            "--expert-provider",
+            "ollama",
+            "--expert-model",
+            model,
+            "--expert-num-ctx",
+            str(int(_read_env_file().get("CTX_SIZE", "8192") or "8192")),
+            "--cowboy-mode",
+            "--log-mode",
+            "console",
+        ]
+        if request.use_aider:
+            args.append("--use-aider")
+        args.extend(["-m", task])
+        return "ra-aid", args
+
+    if engine == "aider":
+        return "aider", [
+            _agent_executable("aider"),
+            "--model",
+            f"ollama_chat/{model}",
+            "--message",
+            task,
+            "--yes-always",
+        ]
+
+    raise HTTPException(status_code=400, detail="engine must be 'ra-aid' or 'aider'")
+
+
 def _latest_user_message(messages: list[dict[str, Any]]) -> str:
     for message in reversed(messages):
         if message.get("role") == "user":
@@ -611,6 +703,7 @@ Available tools:
 - run_command({"command": "pytest -k foo"})
     Run a shell command in the workspace. The user will see the command and must approve. Returns
     {exit_code, stdout, stderr}.
+    Use this for git operations such as `git status`, `git fetch`, and `git pull --ff-only`.
 
 Rules:
 1. Emit AT MOST ONE <<TOOL>> block per response, then stop. Do not narrate what you are about to do
@@ -619,6 +712,8 @@ Rules:
 3. Read before you edit. Never blindly overwrite a file.
 4. When you are finished with the user's request, respond with normal markdown — no <<TOOL>> block.
 5. If a tool returns an error, read it and adapt. Do not repeat the same failing call.
+6. Do not claim to be text-only while this protocol is present. Use a tool call for workspace work.
+7. If the user asks to pull from GitHub or update the repo, call run_command with `git pull --ff-only`.
 """
 
 
@@ -1153,6 +1248,44 @@ async def execute_command(request: ExecuteRequest):
 # ---------------------------------------------------------------------------
 # Agent file tools — read_file / write_file / list_dir
 # ---------------------------------------------------------------------------
+
+@app.post("/api/agent/task", response_model=AgentTaskResponse)
+async def run_agent_task(request: AgentTaskRequest):
+    """Run a PSC MCP-style agent tool: RA.Aid for planning, aider for edits."""
+    cwd = _resolve_execution_cwd(request.cwd)
+    timeout = max(1, min(request.timeout, 3600))
+    engine, args = _build_agent_command(request)
+    display_command = subprocess.list2cmdline(args) if os.name == "nt" else " ".join(shlex.quote(arg) for arg in args)
+
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            _agent_shell_command(args),
+            cwd=str(cwd),
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            env=_agent_subprocess_env(),
+        )
+        return AgentTaskResponse(
+            engine=engine,
+            command=display_command,
+            cwd=str(cwd),
+            exit_code=result.returncode,
+            stdout=result.stdout,
+            stderr=result.stderr,
+        )
+    except subprocess.TimeoutExpired as error:
+        return AgentTaskResponse(
+            engine=engine,
+            command=display_command,
+            cwd=str(cwd),
+            exit_code=124,
+            stdout=error.stdout or "",
+            stderr=error.stderr or f"Agent task timed out after {timeout} seconds",
+            timed_out=True,
+        )
+
 
 @app.post("/api/fs/read")
 async def fs_read(request: ReadFileRequest):

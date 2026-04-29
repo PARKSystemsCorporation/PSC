@@ -9,7 +9,7 @@
     "stop": "node scripts/project-cli.js stop",
     "logs": "node scripts/project-cli.js logs",
     "logs:llm": "node scripts/project-cli.js logs:llm",
-    "logs:telegram": "node scripts/project-cli.js logs:telegram",
+    "mcp:agent": "IPE\\llm-server\\.venv\\Scripts\\python.exe IPE\\mcp\\psc_agent_mcp.py",
     "window": "node scripts/project-cli.js window"
   },
   "engines": {

@@ -231,6 +231,24 @@ export class AiChatService {
         return await resp.json();
     }
 
+    /**
+     * Delegate a coding task to RA.Aid/aider through PSC's local agent wrapper.
+     */
+    async runAgentTask(request: GemmaProtocol.AgentTaskRequest): Promise<GemmaProtocol.AgentTaskResponse> {
+        const resp = await fetch(`${this._serverUrl}/api/agent/task`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(request),
+        });
+
+        if (!resp.ok) {
+            const detail = await resp.text();
+            throw new Error(`Agent task error: ${resp.status} ${detail}`);
+        }
+
+        return await resp.json();
+    }
+
     // ---- Agent file tools ----------------------------------------------
 
     async readFile(path: string, maxBytes?: number): Promise<GemmaProtocol.ReadFileResult> {

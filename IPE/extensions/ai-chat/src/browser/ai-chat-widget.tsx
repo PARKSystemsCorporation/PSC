@@ -45,8 +45,8 @@ type ChatMode = 'code' | 'debug';
  * selected model, so reloads stay consistent without extra persistence.
  */
 const MODE_MODELS: Record<ChatMode, string> = {
-    code: 'gemma3:27b',
-    debug: 'deepseek-r1:14b',
+    code: 'qwen2.5-coder:7b',
+    debug: 'llama3.2:3b',
 };
 
 const MODE_LABELS: Record<ChatMode, { label: string; icon: string; title: string }> = {
@@ -179,7 +179,15 @@ export class AiChatWidget extends ReactWidget {
 
         try {
             if (this.agentMode) {
-                await this.runAgentLoop(userMsg);
+                if (text.toLowerCase().startsWith('/gemma ')) {
+                    userMsg.content = text.slice('/gemma '.length).trim();
+                    await this.runAgentLoop(userMsg);
+                } else {
+                    const handled = await this.runDirectAgentAction(userMsg);
+                    if (!handled) {
+                    await this.runExternalAgentTask(userMsg);
+                    }
+                }
             } else {
                 await this.runSingleShotChat(userMsg);
             }
@@ -212,6 +220,138 @@ export class AiChatWidget extends ReactWidget {
     }
 
     // ---- Agent loop -------------------------------------------------------
+
+    private async runDirectAgentAction(userMsg: ChatMessage): Promise<boolean> {
+        const directCall = this.detectDirectToolCall(userMsg.content);
+        if (!directCall) return false;
+
+        const assistantMsg: ChatMessage = {
+            id: this.generateId(),
+            role: 'assistant',
+            content: '',
+            timestamp: Date.now(),
+            toolCall: directCall,
+        };
+        this.messages.push(assistantMsg);
+        this.update();
+        this.scrollToBottom();
+
+        const result = await this.executeTool(directCall);
+        const resultMsg: ChatMessage = {
+            id: this.generateId(),
+            role: 'user',
+            content: `${GemmaProtocol.TOOL_RESULT_OPEN}\n${JSON.stringify({ name: directCall.name, ...result })}\n${GemmaProtocol.TOOL_CALL_CLOSE}`,
+            timestamp: Date.now(),
+            toolResult: { name: directCall.name, ...result },
+            toolDenied: result.ok === false && result.error === 'user denied',
+        };
+        this.messages.push(resultMsg);
+
+        const summary = this.summarizeDirectToolResult(directCall, result);
+        this.messages.push({
+            id: this.generateId(),
+            role: 'assistant',
+            content: summary,
+            timestamp: Date.now(),
+        });
+        this.update();
+        this.scrollToBottom();
+        return true;
+    }
+
+    private detectDirectToolCall(text: string): GemmaProtocol.AgentToolCall | null {
+        const normalized = text.toLowerCase();
+        const asksPull = /\b(pull|update|sync)\b/.test(normalized);
+        const mentionsGit = /\b(git|github|repo|repository|remote|origin)\b/.test(normalized);
+        if (asksPull && mentionsGit) {
+            return { name: 'run_command', args: { command: 'git pull --ff-only' } };
+        }
+        return null;
+    }
+
+    private async runExternalAgentTask(userMsg: ChatMessage): Promise<void> {
+        const engine = /\baider\b/i.test(userMsg.content) && !/\bra[\.\- ]?aid\b/i.test(userMsg.content) ? 'aider' : 'ra-aid';
+        const call: GemmaProtocol.AgentToolCall = {
+            name: engine === 'aider' ? 'aider_task' : 'ra_aid_task',
+            args: {
+                task: userMsg.content,
+                engine,
+                use_aider: engine === 'ra-aid',
+                timeout: 1800,
+            },
+        };
+
+        const assistantMsg: ChatMessage = {
+            id: this.generateId(),
+            role: 'assistant',
+            content: '',
+            timestamp: Date.now(),
+            toolCall: call,
+        };
+        this.messages.push(assistantMsg);
+        this.update();
+        this.scrollToBottom();
+
+        const approved = await this.confirmTool(call);
+        const result = approved
+            ? await this.runAgentTask(call)
+            : { ok: false, error: 'user denied' };
+
+        this.messages.push({
+            id: this.generateId(),
+            role: 'user',
+            content: `${GemmaProtocol.TOOL_RESULT_OPEN}\n${JSON.stringify({ name: call.name, ...result })}\n${GemmaProtocol.TOOL_CALL_CLOSE}`,
+            timestamp: Date.now(),
+            toolResult: { name: call.name, ...result },
+            toolDenied: result.ok === false && result.error === 'user denied',
+        });
+
+        this.messages.push({
+            id: this.generateId(),
+            role: 'assistant',
+            content: this.summarizeAgentTaskResult(call, result),
+            timestamp: Date.now(),
+        });
+        this.update();
+        this.scrollToBottom();
+    }
+
+    private async runAgentTask(call: GemmaProtocol.AgentToolCall): Promise<{ ok: boolean; result?: any; error?: string }> {
+        try {
+            const data = await this.chatService.runAgentTask({
+                task: call.args.task,
+                engine: call.args.engine,
+                timeout: call.args.timeout,
+                use_aider: call.args.use_aider,
+            });
+            return { ok: true, result: data };
+        } catch (err: any) {
+            return { ok: false, error: err?.message || String(err) };
+        }
+    }
+
+    private summarizeAgentTaskResult(call: GemmaProtocol.AgentToolCall, result: { ok: boolean; result?: any; error?: string }): string {
+        if (!result.ok) {
+            return `Agent task was not run: ${result.error || 'unknown error'}.`;
+        }
+        const data = result.result as GemmaProtocol.AgentTaskResponse;
+        const output = [data.stdout, data.stderr].filter(Boolean).join('\n').trim();
+        const details = output ? `\n\n\`\`\`text\n${output.slice(0, 5000)}\n\`\`\`` : '';
+        return `${call.name === 'aider_task' ? 'aider' : 'RA.Aid + aider'} finished with exit code ${data.exit_code}.${details}`;
+    }
+
+    private summarizeDirectToolResult(call: GemmaProtocol.AgentToolCall, result: { ok: boolean; result?: any; error?: string }): string {
+        if (!result.ok) {
+            return `Command was not run: ${result.error || 'unknown error'}.`;
+        }
+        if (call.name === 'run_command') {
+            const data = result.result as GemmaProtocol.ExecuteResponse;
+            const output = [data.stdout, data.stderr].filter(Boolean).join('\n').trim();
+            const details = output ? `\n\n\`\`\`text\n${output.slice(0, 4000)}\n\`\`\`` : '';
+            return `Command finished with exit code ${data.exit_code}.${details}`;
+        }
+        return 'Done.';
+    }
 
     private async runSingleShotChat(userMsg: ChatMessage): Promise<void> {
         const assistantMsg: ChatMessage = {
@@ -487,6 +627,9 @@ export class AiChatWidget extends ReactWidget {
         const contextLines = [
             '[Gemma IDE request]',
             'You are running inside Gemma Theia IDE, a VS Code-style coding workspace with an AI chat sidebar, editor integration, inline completion, refactoring, and a terminal agent panel.',
+            this.agentMode
+                ? 'Agent mode is ON: you have workspace tools for reading files, listing directories, writing files after approval, and running commands after approval. For coding work, use those tools instead of claiming you can only generate text.'
+                : 'Agent mode is OFF: answer conversationally without workspace tool calls.',
             'Treat the active editor context below as live IDE context, not as a user-authored prompt.',
             `Browser location: ${window.location.href}`,
         ];
@@ -928,6 +1071,8 @@ export class AiChatWidget extends ReactWidget {
             case 'write_file': return 'codicon-edit';
             case 'list_dir': return 'codicon-folder-opened';
             case 'run_command': return 'codicon-terminal';
+            case 'ra_aid_task': return 'codicon-rocket';
+            case 'aider_task': return 'codicon-tools';
             default: return 'codicon-symbol-method';
         }
     }
@@ -938,6 +1083,8 @@ export class AiChatWidget extends ReactWidget {
             case 'list_dir': return call.args?.path || '.';
             case 'write_file': return `${call.args?.path || '(no path)'} (${(call.args?.content?.length ?? 0).toLocaleString()} chars)`;
             case 'run_command': return call.args?.command || '(no command)';
+            case 'ra_aid_task': return call.args?.task || '(no task)';
+            case 'aider_task': return call.args?.task || '(no task)';
             default: return JSON.stringify(call.args);
         }
     }
@@ -991,6 +1138,12 @@ export class AiChatWidget extends ReactWidget {
                 body = (
                     <div className="gemma-tool-meta">
                         Exit {r.exit_code}{r.timed_out ? ' (timed out)' : ''}
+                    </div>
+                );
+            } else if ((result.name === 'ra_aid_task' || result.name === 'aider_task') && r) {
+                body = (
+                    <div className="gemma-tool-meta">
+                        {r.engine} exit {r.exit_code}{r.timed_out ? ' (timed out)' : ''}
                     </div>
                 );
             } else {

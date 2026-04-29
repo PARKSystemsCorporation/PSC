@@ -478,11 +478,6 @@ async function startProject() {
     }
   }
 
-  const telegram = await startDetachedTelegramBridge(env, llmStart ? llmStart.port : llmServerPort(env));
-  if (telegram && !telegram.reused) {
-    log("Telegram bridge launched. Send /start to your bot to test.");
-  }
-
   log(`Starting local CORS proxy on port ${publicPort}...`);
   if (process.platform === "win32") {
     try {
@@ -509,6 +504,7 @@ async function startProject() {
     "/api/complete",
     "/api/terminal",
     "/api/execute",
+    "/api/agent/",
     "/api/workspace",
     "/api/refactor",
     "/api/explain",
@@ -579,7 +575,7 @@ async function startProject() {
   log(`Desktop: http://localhost:${publicPort}`);
   log(`Mobile:  http://${getLocalIpAddress()}:${publicPort}`);
   log(`Workspace: ${workspaceMount}`);
-  log(`Logs:    npm run logs (IDE) | npm run logs:llm | npm run logs:telegram`);
+  log(`Logs:    npm run logs (IDE) | npm run logs:llm`);
   log("Stop:    npm run stop");
 
   spawnDesktopWindow(env, publicPort);
@@ -743,9 +739,6 @@ async function main() {
       return;
     case "logs:llm":
       showLogs(components.llm);
-      return;
-    case "logs:telegram":
-      showLogs(components.telegram);
       return;
     case "window":
       await openWindow();

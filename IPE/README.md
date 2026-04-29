@@ -1,50 +1,104 @@
-# PSC — PARK Systems Corporation Open Source
+# PSC Gemma Theia IDE
 
-## Gemma Theia IDE (Native Local Edition)
+This is the Theia application inside the PSC repo. It provides the browser IDE, chat UI, completion/refactor extensions, and the FastAPI bridge that connects the IDE to local models and agent tools.
 
-AI-powered local coding IDE built on [Eclipse Theia](https://theia-ide.org/) with [Google Gemma 4](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/) agent capabilities.
+The current agent stack is:
 
-> **Status:** Beta — ready for testing and contributions.
+- Ollama for local model serving
+- FastAPI in `llm-server/` for chat, completion, file tools, command tools, and agent delegation
+- RA.Aid for autonomous research/planning/tool use
+- aider for direct code edits
+- `mcp/psc_agent_mcp.py` for MCP-compatible access to the same local tools
 
-This project has been completely overhauled to run **entirely locally and natively on Windows**, with Docker completely removed for a true offline local-first experience.
+## Build
 
-### Quick Start
+From the repo root:
 
-1. **Install Node modules & Build native extensions**
-   ```bash
-   cd PSC/IPE
-   corepack yarn install
-   yarn build
-   ```
-
-2. **Start the IDE**
-   ```bash
-   cd PSC
-   npm start
-   ```
-
-`npm start` now natively bootstraps `IPE/.env`, mounts the full cloned repo into the local IDE process, and serves the UI over `http://localhost:3000`.
-
-### Starting the AI Server
-
-To use the AI capabilities, you need to run the Python LLM server proxy alongside the IDE:
-
-```powershell
-.\scripts\start-llm.ps1
+```bash
+npm run bootstrap
 ```
 
-This script will automatically create a local Python virtual environment (`.venv`), install dependencies, and launch the server. Ensure you have Python installed on your system. 
+Or from this directory:
 
-*(Note: You will also need a local instance of `llama.cpp` or vLLM running to serve the GGUF model files).*
+```bash
+corepack yarn install
+yarn build
+```
 
-### Key Features
+## Run
 
-- **Gemma 4 AI Agent** — Chat, inline completion, refactoring, and autonomous terminal agent
-- **Eclipse Theia Foundation** — Full VS Code-compatible IDE experience
-- **Pure Local Execution** — No Docker, no container overhead, running natively on your host machine.
-- **iPad & Mobile Access** — Connect from any device via local WiFi
-- **Local-First** — All AI inference runs on your machine via llama.cpp or vLLM
+From the repo root:
 
-### License
+```bash
+npm start
+```
 
-[MIT](LICENSE)
+This starts:
+
+- Theia on `IDE_PORT + 1` (default `3001`)
+- FastAPI LLM/agent server on `LLM_SERVER_PORT` (default `8000`)
+- Local reverse proxy on `IDE_PORT` (default `3000`)
+- Optional desktop browser window when `OPEN_WINDOW=true`
+
+## Agent Mode
+
+The chat extension defaults Agent mode on. Normal coding tasks are delegated to RA.Aid with aider enabled. If the user asks to use aider directly, the IDE calls aider one-shot mode. If the user asks to pull/update/sync from GitHub, the IDE asks for approval and runs:
+
+```bash
+git pull --ff-only
+```
+
+The old local-model tool loop is still available for experimentation by prefixing a request with:
+
+```text
+/gemma your request here
+```
+
+## MCP
+
+Start the PSC MCP server from the repo root:
+
+```bash
+npm run mcp:agent
+```
+
+It exposes:
+
+- `git_pull`
+- `ra_aid_task`
+- `aider_task`
+
+The MCP server uses the same target workspace and model environment as the IDE.
+
+## Local Model Defaults
+
+Recommended fast local model:
+
+```bash
+ollama pull qwen2.5-coder:7b
+```
+
+Important `.env` settings:
+
+```bash
+LLM_MODEL=qwen2.5-coder:7b
+CTX_SIZE=8192
+MEMPALACE_ENABLED=false
+PERSONAPLEX_ENABLED=false
+PSC_TARGET_WORKSPACE=..
+```
+
+RA.Aid and aider are installed via `llm-server/requirements.txt` into `llm-server/.venv`.
+
+## Logs
+
+From the repo root:
+
+```bash
+npm run logs
+npm run logs:llm
+```
+
+## License
+
+[MIT](../LICENSE)

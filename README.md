@@ -1,10 +1,14 @@
-# PSC — PARK Systems Corporation Open Source
+# PSC - PARK Systems Corporation Open Source
 
 ## Gemma Theia IDE (Native Local Edition)
 
-AI-powered local coding IDE built on [Eclipse Theia](https://theia-ide.org/) with [Google Gemma](https://blog.google/technology/developers/gemma-open-models/) agent capabilities, plus a Telegram bridge so you can chat with the agent from your phone while away from the desk.
+PSC is a local-first coding IDE built on [Eclipse Theia](https://theia-ide.org/). It runs natively on Windows, serves the IDE through a local proxy, and uses local Ollama models for chat/completion while delegating serious coding work to open-source agent tools:
 
-> **Status:** Beta — runs entirely locally on Windows. macOS and Linux supported for the IDE; LLM auto-launch is Windows-only today.
+- **RA.Aid** as the planning/tool brain
+- **aider** as the code-editing hand
+- **MCP wrapper** for tool access from compatible clients
+
+> **Status:** Beta. The Windows native path is the primary supported path today. macOS/Linux can run the IDE, but the automatic LLM/server launcher is Windows-focused.
 
 ---
 
@@ -13,73 +17,111 @@ AI-powered local coding IDE built on [Eclipse Theia](https://theia-ide.org/) wit
 ```bash
 git clone https://github.com/parksystemscorporation/psc
 cd psc
-npm run bootstrap   # one-time: yarn install (no scripts) → patch-package → rebuild native modules
-npm start           # launches Theia + LLM server + Telegram bridge + reverse proxy + desktop window
+npm run bootstrap
+npm start
 ```
 
-`npm start` brings everything up in one command and pops a chromeless Edge/Chrome app window pointing at the IDE. The proxy stays in the foreground; press `Ctrl+C` to release it (background services keep running — `npm run stop` shuts them down).
+`npm start` launches Theia, the local FastAPI LLM/agent server, the reverse proxy, and a desktop browser window. The proxy stays in the foreground; press `Ctrl+C` to release it. Background services keep running until `npm run stop`.
 
 ---
 
-### What `npm start` actually does
+### What `npm start` Does
 
-1. **Theia backend** boots on `IDE_PORT + 1` (default `3001`).
-2. **LLM server** (FastAPI) boots on `LLM_SERVER_PORT` (default `8000`). On Windows the launcher uses [scripts/start-llm.ps1](scripts/start-llm.ps1) the first time (creates the venv, installs deps), then runs Python directly with `-u` for live unbuffered logs on subsequent runs.
-3. **Telegram bridge** ([IPE/llm-server/telegram_bridge.py](IPE/llm-server/telegram_bridge.py)) starts only if `TELEGRAM_BOT_TOKEN` is set in [IPE/.env](IPE/.env.example).
-4. **Reverse proxy** binds `IDE_PORT` (default `3000`) and routes:
-   - `/api/chat`, `/api/complete`, `/api/terminal`, `/api/refactor`, `/api/explain`, `/api/setup/*`, `/health` → LLM server
-   - everything else (including `/api/connection/*` for Theia's WebSocket) → Theia
-   - explicit CORS headers + `OPTIONS` preflight handling at the proxy layer
-   - returns structured `503 {error, detail, upstream}` JSON when an upstream is unreachable
-5. **Desktop window** opens via `msedge --app=` (or Chrome, falling back to your default browser).
+1. **Theia backend** starts on `IDE_PORT + 1` (default `3001`).
+2. **FastAPI LLM/agent server** starts on `LLM_SERVER_PORT` (default `8000`). On first run, it creates `IPE/llm-server/.venv` and installs Python dependencies.
+3. **Reverse proxy** binds `IDE_PORT` (default `3000`) and routes IDE traffic to Theia and AI/tool traffic to FastAPI.
+4. **Desktop window** opens via Edge or Chrome when `OPEN_WINDOW=true`.
 
-### Daily commands
+Telegram has been removed from the default runtime path. PSC is now focused on fast local IDE use.
 
-| | |
+### Daily Commands
+
+| Command | Purpose |
 |---|---|
-| `npm start` | launch the full stack |
-| `npm run stop` | terminate Theia + LLM server + Telegram bridge background processes |
-| `npm run logs` | tail the Theia log |
-| `npm run logs:llm` | tail the LLM server log |
-| `npm run logs:telegram` | tail the Telegram bridge log |
-| `npm run window` | open another desktop window pointing at the running proxy |
-| `npm run bootstrap` | re-run the full install (yarn → patch-package → native rebuild) |
+| `npm start` | Launch the local IDE stack |
+| `npm run stop` | Stop Theia and the LLM/agent server |
+| `npm run logs` | Tail the Theia log |
+| `npm run logs:llm` | Tail the FastAPI LLM/agent server log |
+| `npm run window` | Open another desktop window |
+| `npm run bootstrap` | Reinstall/build Theia dependencies and native modules |
+| `npm run mcp:agent` | Start the PSC MCP agent server over stdio |
 
 ---
 
-### LLM model setup
+### Local Agent Stack
 
-The LLM server proxies to a local llama.cpp instance on `127.0.0.1:8080`. To enable AI features:
+PSC uses a split-brain local agent architecture:
 
-1. Place a GGUF model in [IPE/models/](IPE/models/) and put its filename in `GEMMA_MODEL` in [IPE/.env](IPE/.env.example).
-2. Drop `llama-server.exe` (from [llama.cpp releases](https://github.com/ggerganov/llama.cpp/releases)) into the same `IPE/models/` directory. `start-llm.ps1` auto-launches it on first run.
-3. Restart with `npm run stop && npm start`.
+- Simple chat/completion still goes through the local Ollama-backed LLM server.
+- Normal Agent mode delegates coding tasks to **RA.Aid** with `--use-aider`.
+- Requests that explicitly mention aider can run **aider** directly.
+- Git update requests are handled as a direct approved `git pull --ff-only`.
+- The MCP server at [IPE/mcp/psc_agent_mcp.py](IPE/mcp/psc_agent_mcp.py) exposes:
+  - `git_pull`
+  - `ra_aid_task`
+  - `aider_task`
 
-You can also configure models in-app from Theia's setup panel once the IDE loads.
+RA.Aid and aider are installed into `IPE/llm-server/.venv` from [IPE/llm-server/requirements.txt](IPE/llm-server/requirements.txt). The default local model is configured through `LLM_MODEL` in `IPE/.env`; the current fast default is `qwen2.5-coder:7b`.
+
+To use the MCP server from an MCP client, run:
+
+```bash
+npm run mcp:agent
+```
+
+The MCP server reads `PSC_TARGET_WORKSPACE`, `LLM_MODEL`, `OLLAMA_BASE_URL`, and `CTX_SIZE` from the environment when provided.
 
 ---
 
-### Telegram bridge — chat with your agent from your phone
+### Model Setup
 
-1. Talk to [@BotFather](https://t.me/botfather), `/newbot`, paste the token into `TELEGRAM_BOT_TOKEN` in [IPE/.env](IPE/.env.example).
-2. `npm start`, message your bot anything. It rejects the message with your `chat_id` printed.
-3. Paste that id into `TELEGRAM_ALLOWED_CHAT_IDS` (comma-separated for multiple users), then `npm run stop && npm start`.
-4. Slash commands inside the chat: `/start /help /reset /mode <chat|terminal> /status /whoami`.
+PSC expects Ollama to be available at `http://127.0.0.1:11434`.
+
+Recommended fast local setup:
+
+```bash
+ollama pull qwen2.5-coder:7b
+```
+
+Then confirm `IPE/.env` contains:
+
+```bash
+LLM_BACKEND=llamacpp
+LLM_MODEL=qwen2.5-coder:7b
+MEMPALACE_ENABLED=false
+PERSONAPLEX_ENABLED=false
+```
+
+Larger models can work, but they will feel slow on CPU or limited VRAM. The old memory/persona sidecars are disabled by default to keep startup and first-token latency low.
 
 ---
 
-### Native module patches (Windows + Node 24)
+### Configuration
 
-Theia ships several native addons (`drivelist`, `keytar`, `node-pty`, `nsfw`, `msgpackr-extract`) that don't have prebuilds for Node ABI 137. Two compatibility issues come up on a fresh Windows install:
+Runtime configuration lives in `IPE/.env`. Key settings:
 
-1. **Node 24's bundled `common.gypi` forces the `ClangCL` MSBuild toolset** — but most VS Build Tools setups only have the `v143` MSVC toolset installed. We pin `clang=false` in [IPE/.npmrc](IPE/.npmrc) so node-gyp falls back to MSVC.
-2. **node-pty 0.11 doesn't compile under MSVC C++20 strict mode + modern Win SDK.** Five small patches captured in [IPE/patches/node-pty+0.11.0-beta24.patch](IPE/patches/) fix:
-   - `PFNCREATEPSEUDOCONSOLE` typedefs hidden behind a `#ifdef` the modern SDK trips
-   - `goto cleanup;` past initialized variables (replaced with inline cleanup macro)
-   - bat-script invocations that fail when cmd's CWD search is disabled (`NoDefaultCurrentDirectoryInExePath`)
-   - `/Zc:gotoScope-` and `-std:c++17` flags
+```bash
+IDE_PORT=3000
+LLM_SERVER_PORT=8000
+START_LLM_SERVER=true
+OPEN_WINDOW=true
+HOST_WORKSPACE=..
+PSC_TARGET_WORKSPACE=..
+LLM_MODEL=qwen2.5-coder:7b
+CTX_SIZE=8192
+MEMPALACE_ENABLED=false
+PERSONAPLEX_ENABLED=false
+```
 
-Patches reapply automatically via [patch-package](https://github.com/ds300/patch-package) on every install. If you reinstall, run `npm run bootstrap` rather than raw `yarn install` — bootstrap uses `--ignore-scripts` to defeat the chicken-and-egg between auto-rebuild and patch application.
+`PSC_TARGET_WORKSPACE` controls where RA.Aid, aider, git commands, and file tools operate.
+
+---
+
+### Native Module Patches
+
+Theia ships several native addons that need Windows/Node compatibility patches. `npm run bootstrap` applies the patches in [IPE/patches](IPE/patches/) through `patch-package` and rebuilds the native pieces.
+
+Use `npm run bootstrap` after dependency changes instead of raw `yarn install`.
 
 ---
 
@@ -87,33 +129,20 @@ Patches reapply automatically via [patch-package](https://github.com/ds300/patch
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `bindings.js: Could not locate the bindings file` | Native module not rebuilt for your Node ABI | `npm run bootstrap` |
-| `Bad gateway` / `503` from `/api/chat` | LLM server died or hasn't booted | `npm run logs:llm` to inspect; check that a GGUF model and `llama-server.exe` are in `IPE/models/` |
-| Stale PID lockout (refuses to relaunch) | Should not happen — the launcher cross-checks PID + port and clears stale state. If it does, `rm IPE/.*.pid` then `npm start`. |
-| Window doesn't pop up | Edge/Chrome not installed, or `OPEN_WINDOW=false` set in `.env` | Open `http://localhost:3000` in any browser; the IDE works equally well as a tab |
-| WebSocket disconnects on Theia load | Proxy was killed but Theia is still running on port 3001 | `npm run stop` and re-run `npm start` |
-
-### Configuration
-
-All runtime configuration lives in [IPE/.env](IPE/.env.example). Key knobs:
-
-```bash
-IDE_PORT=3000               # public-facing port (proxy)
-LLM_SERVER_PORT=8000        # FastAPI proxy port
-START_LLM_SERVER=true       # set false if you run the LLM server yourself
-OPEN_WINDOW=true            # set false on headless servers
-TELEGRAM_BOT_TOKEN=         # blank disables the Telegram bridge
-TELEGRAM_ALLOWED_CHAT_IDS=
-```
+| Agent says a tool is missing | Python venv is stale | `IPE\llm-server\.venv\Scripts\python.exe -m pip install -r IPE\llm-server\requirements.txt` |
+| Slow responses | Model too large or memory/persona sidecars enabled | Use `qwen2.5-coder:7b`, keep `MEMPALACE_ENABLED=false` and `PERSONAPLEX_ENABLED=false` |
+| `/api/chat` returns 503 | FastAPI server is down | `npm run logs:llm`, then `npm run stop && npm start` |
+| Aider/RA.Aid fails to run | Ollama model missing | `ollama pull qwen2.5-coder:7b` |
+| Native module error | Theia native modules not rebuilt | `npm run bootstrap` |
 
 ### Key Features
 
-- **Gemma AI Agent** — Chat, inline completion, refactoring, autonomous terminal agent
-- **Eclipse Theia Foundation** — Full VS Code-compatible IDE experience
-- **Pure Local Execution** — No Docker, runs natively on your host machine
-- **iPad & Mobile Access** — Connect from any device on local Wi-Fi via `http://<your-ip>:3000`
-- **Telegram Bridge** — Talk to the agent from anywhere
-- **One-Command Bootstrap** — `npm run bootstrap` handles patches, native builds, and venv setup
+- **Theia IDE** - VS Code-style local development environment
+- **Local Ollama Models** - Chat and completion without cloud dependency
+- **RA.Aid + aider Agent Mode** - Open-source autonomous planning plus code edits
+- **MCP Agent Server** - `git_pull`, `ra_aid_task`, and `aider_task` over stdio
+- **Fast Local Defaults** - Smaller coder model, memory/persona sidecars off
+- **One-Command Launcher** - `npm start` brings up the working local stack
 
 ### License
 

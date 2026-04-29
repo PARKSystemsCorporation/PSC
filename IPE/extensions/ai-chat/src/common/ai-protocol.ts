@@ -122,6 +122,26 @@ export namespace GemmaProtocol {
         timed_out: boolean;
     }
 
+    /** RA.Aid/aider task request */
+    export interface AgentTaskRequest {
+        task: string;
+        engine?: 'ra-aid' | 'aider';
+        cwd?: string;
+        timeout?: number;
+        use_aider?: boolean;
+    }
+
+    /** RA.Aid/aider task response */
+    export interface AgentTaskResponse {
+        engine: string;
+        command: string;
+        cwd: string;
+        exit_code: number;
+        stdout: string;
+        stderr: string;
+        timed_out: boolean;
+    }
+
     /** PSC target workspace status */
     export interface WorkspaceStatus {
         target_workspace: string;

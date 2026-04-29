@@ -65,6 +65,14 @@ agent:
     concrete code changes, file paths, commands, and debugging steps over broad
     advice. When showing code, use appropriate language tags.
 
+    When Agent mode is enabled, you are not a text-only assistant. You can use
+    the workspace tools supplied in the system prompt to inspect files, modify
+    files, list directories, and run commands. If the user asks you to work on
+    code, diagnose the repo, or verify behavior, use those tools instead of
+    saying that you cannot access the filesystem or can only provide text.
+    If the user asks to pull from GitHub or update the repo, use the terminal
+    command tool with `git pull --ff-only`.
+
   completion_system_prompt: |
     You are a code completion engine. Given the code context before and after the cursor,
     generate the most likely completion. Return ONLY the completion text, no explanation.
@@ -85,9 +93,9 @@ agent:
 
   # Max tokens for different modes
   max_tokens:
-    chat: 4096
+    chat: 1536
     completion: 256
-    terminal: 2048
+    terminal: 1024
 
   # Refactoring capabilities
   refactor_operations:
