@@ -39,6 +39,8 @@ type ChatTab = 'chat' | 'preview';
 
 type ChatMode = 'code' | 'debug';
 
+type AgentRoute = 'ra-aid' | 'aider' | 'gemma';
+
 /**
  * Footer mode → Ollama tag mapping. Clicking a mode in the footer swaps the
  * active model on the server. The active mode is inferred from the currently
@@ -100,6 +102,7 @@ export class AiChatWidget extends ReactWidget {
 
     // Agent-mode state
     private agentMode: boolean = true;
+    private agentRoute: AgentRoute = 'ra-aid';
     private pendingConfirm: PendingConfirm | null = null;
 
     // Model picker state
@@ -179,8 +182,10 @@ export class AiChatWidget extends ReactWidget {
 
         try {
             if (this.agentMode) {
-                if (text.toLowerCase().startsWith('/gemma ')) {
-                    userMsg.content = text.slice('/gemma '.length).trim();
+                if (this.agentRoute === 'gemma' || text.toLowerCase().startsWith('/gemma ')) {
+                    userMsg.content = text.toLowerCase().startsWith('/gemma ')
+                        ? text.slice('/gemma '.length).trim()
+                        : text;
                     await this.runAgentLoop(userMsg);
                 } else {
                     const handled = await this.runDirectAgentAction(userMsg);
@@ -195,6 +200,55 @@ export class AiChatWidget extends ReactWidget {
             this.isGenerating = false;
             this.abortController = null;
             this.update();
+        }
+    }
+
+    private async runShortcutCommand(label: string, command: string, timeout: number = 600): Promise<void> {
+        if (this.isGenerating) return;
+
+        const userMsg: ChatMessage = {
+            id: this.generateId(),
+            role: 'user',
+            content: label,
+            timestamp: Date.now(),
+        };
+        const call: GemmaProtocol.AgentToolCall = {
+            name: 'run_command',
+            args: { command, timeout },
+        };
+        const assistantMsg: ChatMessage = {
+            id: this.generateId(),
+            role: 'assistant',
+            content: '',
+            timestamp: Date.now(),
+            toolCall: call,
+        };
+
+        this.messages.push(userMsg, assistantMsg);
+        this.isGenerating = true;
+        this.update();
+        this.scrollToBottom();
+
+        try {
+            const result = await this.executeTool(call);
+            this.messages.push({
+                id: this.generateId(),
+                role: 'user',
+                content: `${GemmaProtocol.TOOL_RESULT_OPEN}\n${JSON.stringify({ name: call.name, ...result })}\n${GemmaProtocol.TOOL_CALL_CLOSE}`,
+                timestamp: Date.now(),
+                toolResult: { name: call.name, ...result },
+                toolDenied: result.ok === false && result.error === 'user denied',
+            });
+            this.messages.push({
+                id: this.generateId(),
+                role: 'assistant',
+                content: this.summarizeDirectToolResult(call, result),
+                timestamp: Date.now(),
+            });
+        } finally {
+            this.isGenerating = false;
+            this.update();
+            this.scrollToBottom();
         }
     }
 
@@ -270,7 +324,7 @@ export class AiChatWidget extends ReactWidget {
     }
 
     private async runExternalAgentTask(userMsg: ChatMessage): Promise<void> {
-        const engine = /\baider\b/i.test(userMsg.content) && !/\bra[\.\- ]?aid\b/i.test(userMsg.content) ? 'aider' : 'ra-aid';
+        const engine = this.agentRoute === 'aider' || (/\baider\b/i.test(userMsg.content) && !/\bra[\.\- ]?aid\b/i.test(userMsg.content)) ? 'aider' : 'ra-aid';
         const call: GemmaProtocol.AgentToolCall = {
             name: engine === 'aider' ? 'aider_task' : 'ra_aid_task',
             args: {
@@ -591,7 +645,7 @@ export class AiChatWidget extends ReactWidget {
                 case 'run_command': {
                     const approved = await this.confirmTool(call);
                     if (!approved) return { ok: false, error: 'user denied' };
-                    const data = await this.chatService.execute({ command: call.args.command, cwd: call.args.cwd });
+                    const data = await this.chatService.execute({ command: call.args.command, cwd: call.args.cwd, timeout: call.args.timeout });
                     return { ok: true, result: data };
                 }
                 default:
@@ -1423,6 +1477,82 @@ export class AiChatWidget extends ReactWidget {
         );
     }
 
+    private renderAgentControlPanel(): React.ReactNode {
+        const routes: Array<{ id: AgentRoute; label: string; icon: string; title: string }> = [
+            { id: 'ra-aid', label: 'RA.Aid', icon: 'codicon-rocket', title: 'Planner/tool brain with aider enabled for edits' },
+            { id: 'aider', label: 'aider', icon: 'codicon-tools', title: 'Direct code-editing hand' },
+            { id: 'gemma', label: 'Gemma', icon: 'codicon-hubot', title: 'Legacy local model tool loop' },
+        ];
+        const routeCopy: Record<AgentRoute, string> = {
+            'ra-aid': 'Planner + editing hand',
+            aider: 'Direct edit mode',
+            gemma: 'Local tool loop',
+        };
+
+        return (
+            <div className="gemma-agent-panel">
+                <div className="gemma-agent-panel-row">
+                    <div className="gemma-agent-route" role="group" aria-label="Agent engine">
+                        {routes.map(route => (
+                            <button
+                                key={route.id}
+                                className={`gemma-route-btn ${this.agentRoute === route.id ? 'active' : ''}`}
+                                title={route.title}
+                                onClick={() => { this.agentRoute = route.id; this.update(); }}
+                                disabled={this.isGenerating || !this.agentMode}
+                            >
+                                <span className={`codicon ${route.icon}`} />
+                                <span>{route.label}</span>
+                            </button>
+                        ))}
+                    </div>
+                    <div className="gemma-agent-current" title="Current routing">
+                        <span className="codicon codicon-git-compare" />
+                        <span>{this.agentMode ? routeCopy[this.agentRoute] : 'Chat only'}</span>
+                    </div>
+                </div>
+                <div className="gemma-agent-panel-row compact">
+                    <button
+                        className="gemma-agent-action"
+                        title="Check offline Canopy prerequisites"
+                        disabled={this.isGenerating}
+                        onClick={() => this.runShortcutCommand('Check Canopy prerequisites', 'npm.cmd run canopy:check', 120)}
+                    >
+                        <span className="codicon codicon-checklist" />
+                        <span>Check Canopy</span>
+                    </button>
+                    <button
+                        className="gemma-agent-action"
+                        title="Launch Canopy dashboards for Vestra and Lila"
+                        disabled={this.isGenerating}
+                        onClick={() => this.runShortcutCommand('Launch Canopy dashboards', 'npm.cmd run canopy', 120)}
+                    >
+                        <span className="codicon codicon-dashboard" />
+                        <span>Canopy</span>
+                    </button>
+                    <button
+                        className="gemma-agent-action"
+                        title="Create Canopy worktrees, then launch dashboards"
+                        disabled={this.isGenerating}
+                        onClick={() => this.runShortcutCommand('Prepare Canopy worktrees', 'npm.cmd run canopy:setup', 300)}
+                    >
+                        <span className="codicon codicon-git-branch" />
+                        <span>Worktrees</span>
+                    </button>
+                    <button
+                        className="gemma-agent-action"
+                        title="Fast-forward pull the active workspace"
+                        disabled={this.isGenerating}
+                        onClick={() => this.runShortcutCommand('Pull active workspace', 'git pull --ff-only', 300)}
+                    >
+                        <span className="codicon codicon-cloud-download" />
+                        <span>Pull</span>
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
     protected render(): React.ReactNode {
         const lastAssistant = [...this.messages].reverse().find(m => m.role === 'assistant');
         const previewSource = lastAssistant?.content ?? '';
@@ -1459,6 +1589,7 @@ export class AiChatWidget extends ReactWidget {
                 </div>
 
                 {this.renderTabs()}
+                {this.renderAgentControlPanel()}
 
                 {/* Tab body */}
                 {this.activeTab === 'chat' ? (
@@ -1466,15 +1597,22 @@ export class AiChatWidget extends ReactWidget {
                         <div className="gemma-chat-messages">
                             {this.messages.length === 0 && (
                                 <div className="gemma-chat-welcome">
-                                    <h3>Welcome to Gemma AI</h3>
-                                    <p>Ask me anything about your code. I can:</p>
-                                    <ul>
-                                        <li>Generate and explain code</li>
-                                        <li>Debug errors and suggest fixes</li>
-                                        <li>Refactor and optimize code</li>
-                                        <li>Answer programming questions</li>
-                                    </ul>
-                                    <p><em>Tip: Select code in the editor before asking for context-aware help.</em></p>
+                                    <h3>Local Agent Console</h3>
+                                    <p>Pick an engine above, then send a task. RA.Aid handles planning, aider edits, and Canopy supervises parallel worktrees.</p>
+                                    <div className="gemma-welcome-grid">
+                                        <button onClick={() => { this.agentRoute = 'ra-aid'; this.inputValue = 'Inspect the repo and propose the next safest implementation step.'; this.update(); }}>
+                                            <span className="codicon codicon-rocket" /> Plan with RA.Aid
+                                        </button>
+                                        <button onClick={() => { this.agentRoute = 'aider'; this.inputValue = 'Make the smallest safe code change for:'; this.update(); }}>
+                                            <span className="codicon codicon-tools" /> Edit with aider
+                                        </button>
+                                        <button onClick={() => this.runShortcutCommand('Check Canopy prerequisites', 'npm.cmd run canopy:check', 120)}>
+                                            <span className="codicon codicon-dashboard" /> Check Canopy
+                                        </button>
+                                        <button onClick={() => this.runShortcutCommand('Pull active workspace', 'git pull --ff-only', 300)}>
+                                            <span className="codicon codicon-cloud-download" /> Git Pull
+                                        </button>
+                                    </div>
                                 </div>
                             )}
                             {this.messages.map(msg => this.renderConversationMessage(msg))}
@@ -1649,21 +1787,132 @@ export class AiChatWidget extends ReactWidget {
                         margin-bottom: -1px;
                     }
 
+                    .gemma-agent-panel {
+                        padding: 8px 10px;
+                        border-bottom: 1px solid var(--theia-panel-border);
+                        background: var(--theia-editorGroupHeader-tabsBackground, var(--theia-editor-background));
+                        display: flex;
+                        flex-direction: column;
+                        gap: 7px;
+                    }
+                    .gemma-agent-panel-row {
+                        display: flex;
+                        align-items: center;
+                        gap: 8px;
+                        min-width: 0;
+                    }
+                    .gemma-agent-panel-row.compact {
+                        gap: 6px;
+                        flex-wrap: wrap;
+                    }
+                    .gemma-agent-route {
+                        display: inline-flex;
+                        align-items: center;
+                        border: 1px solid var(--theia-panel-border);
+                        border-radius: 4px;
+                        overflow: hidden;
+                        flex-shrink: 0;
+                    }
+                    .gemma-route-btn {
+                        display: inline-flex;
+                        align-items: center;
+                        gap: 5px;
+                        min-height: 28px;
+                        padding: 4px 8px;
+                        border: none;
+                        border-right: 1px solid var(--theia-panel-border);
+                        background: transparent;
+                        color: var(--theia-foreground);
+                        cursor: pointer;
+                        font-size: 11px;
+                    }
+                    .gemma-route-btn:last-child { border-right: none; }
+                    .gemma-route-btn:hover:not(:disabled):not(.active) {
+                        background: var(--theia-list-hoverBackground);
+                    }
+                    .gemma-route-btn.active {
+                        background: var(--theia-button-background);
+                        color: var(--theia-button-foreground);
+                    }
+                    .gemma-route-btn:disabled {
+                        opacity: 0.45;
+                        cursor: default;
+                    }
+                    .gemma-agent-current {
+                        display: inline-flex;
+                        align-items: center;
+                        gap: 5px;
+                        min-width: 0;
+                        opacity: 0.72;
+                        font-size: 11px;
+                        white-space: nowrap;
+                        overflow: hidden;
+                        text-overflow: ellipsis;
+                    }
+                    .gemma-agent-action {
+                        display: inline-flex;
+                        align-items: center;
+                        gap: 5px;
+                        min-height: 28px;
+                        padding: 4px 8px;
+                        border: 1px solid var(--theia-panel-border);
+                        border-radius: 4px;
+                        background: var(--theia-button-secondaryBackground, transparent);
+                        color: var(--theia-foreground);
+                        cursor: pointer;
+                        font-size: 11px;
+                    }
+                    .gemma-agent-action:hover:not(:disabled) {
+                        background: var(--theia-list-hoverBackground);
+                    }
+                    .gemma-agent-action:disabled {
+                        opacity: 0.45;
+                        cursor: default;
+                    }
+
                     .gemma-chat-messages {
                         flex: 1;
                         overflow-y: auto;
                         padding: 12px;
                     }
                     .gemma-chat-welcome {
-                        padding: 20px;
-                        text-align: center;
-                        opacity: 0.7;
-                    }
-                    .gemma-chat-welcome h3 { margin-bottom: 12px; }
-                    .gemma-chat-welcome ul {
+                        padding: 18px 12px;
                         text-align: left;
-                        max-width: 300px;
-                        margin: 8px auto;
+                        opacity: 0.92;
+                        border: 1px solid var(--theia-panel-border);
+                        border-radius: 6px;
+                        background: var(--theia-editorWidget-background, var(--theia-editor-background));
+                    }
+                    .gemma-chat-welcome h3 {
+                        margin: 0 0 8px;
+                        font-size: 14px;
+                    }
+                    .gemma-chat-welcome p {
+                        margin: 0 0 12px;
+                        line-height: 1.45;
+                        opacity: 0.78;
+                    }
+                    .gemma-welcome-grid {
+                        display: grid;
+                        grid-template-columns: repeat(2, minmax(0, 1fr));
+                        gap: 8px;
+                    }
+                    .gemma-welcome-grid button {
+                        display: inline-flex;
+                        align-items: center;
+                        justify-content: center;
+                        gap: 6px;
+                        min-height: 34px;
+                        padding: 7px 8px;
+                        border-radius: 4px;
+                        border: 1px solid var(--theia-panel-border);
+                        background: var(--theia-button-secondaryBackground, transparent);
+                        color: var(--theia-foreground);
+                        cursor: pointer;
+                        font-size: 12px;
+                    }
+                    .gemma-welcome-grid button:hover {
+                        background: var(--theia-list-hoverBackground);
                     }
                     .gemma-message {
                         display: flex;

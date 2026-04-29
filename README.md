@@ -44,6 +44,10 @@ Telegram has been removed from the default runtime path. PSC is now focused on f
 | `npm run logs:llm` | Tail the FastAPI LLM/agent server log |
 | `npm run window` | Open another desktop window |
 | `npm run bootstrap` | Reinstall/build Theia dependencies and native modules |
+| `npm run canopy:check` | Verify WSL, tmux, git, and Canopy are already available |
+| `npm run canopy` | Launch Canopy dashboards for Vestra and Lila |
+| `npm run canopy:setup` | Create default Canopy git worktrees, then launch dashboards |
+| `npm run canopy:install-online` | Optional online maintenance helper for WSL/tmux/Canopy setup |
 | `npm run mcp:agent` | Start the PSC MCP agent server over stdio |
 
 ---
@@ -70,6 +74,78 @@ npm run mcp:agent
 ```
 
 The MCP server reads `PSC_TARGET_WORKSPACE`, `LLM_MODEL`, `OLLAMA_BASE_URL`, and `CTX_SIZE` from the environment when provided.
+
+---
+
+### Canopy Multi-Agent Dashboard
+
+PSC includes a Windows launcher for [isacssw/canopy](https://github.com/isacssw/canopy), a `tmux` TUI for supervising multiple coding agents across git worktrees.
+
+Canopy itself runs best from WSL on Windows because it requires `tmux`. This is not Docker and not a Linux container runtime. PSC, Ollama, RA.Aid, aider, and the FastAPI bridge still run natively on Windows; WSL is only the local terminal/session substrate for Canopy.
+
+Check prerequisites without fetching anything:
+
+```bash
+npm run canopy:check
+```
+
+Offline-primary means normal PSC commands do not run `apt`, `go install`, `pip install`, or `ollama pull`. Prepare WSL/tmux/Canopy once from your offline package cache or during an approved online maintenance window.
+
+Manual online equivalent inside WSL, only when internet use is acceptable:
+
+```bash
+sudo apt update
+sudo apt install -y tmux golang-go
+go install github.com/isacssw/canopy/cmd/canopy@latest
+```
+
+PSC also includes an explicit helper for that online maintenance window:
+
+```bash
+npm run canopy:install-online
+```
+
+Then launch both project dashboards from Windows:
+
+```bash
+npm run canopy
+```
+
+This opens two Canopy tabs:
+
+- `C:\vestra`
+- `C:\lila`
+
+Canopy is the primary dashboard for the parallel agents. PSC writes the WSL Canopy config automatically with two local agent profiles:
+
+- `psc-ra-aid` - RA.Aid planner/tool brain with aider enabled
+- `psc-aider` - aider direct editing hand
+
+To prepare separate git worktrees for the two primary agents before launching:
+
+```bash
+npm run canopy:setup
+```
+
+That creates `.canopy-worktrees\vestra-agent` and `.canopy-worktrees\lila-agent` where possible, so agents can work in isolated git worktrees and avoid file lock contention. Canopy can also create and manage additional worktrees from its own TUI with `n`.
+
+---
+
+### Currency SQLite MCP Bridge
+
+The PSC MCP server includes read-only SQLite tools for the future in-world currency database:
+
+- `currency_sqlite_schema`
+- `currency_sqlite_read`
+
+Set the database path before starting the MCP server:
+
+```bash
+set WORLD_CURRENCY_SQLITE=C:\path\to\currency.sqlite
+npm run mcp:agent
+```
+
+Queries are opened with SQLite `mode=ro` and limited to read-only `SELECT`, `WITH`, and `PRAGMA` statements.
 
 ---
 

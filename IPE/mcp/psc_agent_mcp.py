@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -75,6 +76,57 @@ def _tool_result(payload: dict[str, Any]) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": json.dumps(payload, indent=2)}]}
 
 
+def _currency_db_path() -> Path:
+    raw = os.environ.get("WORLD_CURRENCY_SQLITE") or os.environ.get("PSC_CURRENCY_SQLITE")
+    if not raw:
+        raise ValueError("Set WORLD_CURRENCY_SQLITE to the SQLite database path first.")
+    path = Path(raw).expanduser().resolve()
+    if not path.exists():
+        raise ValueError(f"SQLite database does not exist: {path}")
+    return path
+
+
+def _connect_currency_db() -> sqlite3.Connection:
+    path = _currency_db_path()
+    uri = f"file:{path.as_posix()}?mode=ro"
+    return sqlite3.connect(uri, uri=True)
+
+
+def _sqlite_schema() -> dict[str, Any]:
+    with _connect_currency_db() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT type, name, tbl_name, sql
+            FROM sqlite_master
+            WHERE type IN ('table', 'view', 'index', 'trigger')
+            ORDER BY type, name
+            """
+        ).fetchall()
+    return {"database": str(_currency_db_path()), "schema": [dict(row) for row in rows]}
+
+
+def _sqlite_read(query: str, params: list[Any] | None = None, limit: int = 100) -> dict[str, Any]:
+    normalized = query.strip().lower()
+    if not (normalized.startswith("select") or normalized.startswith("with") or normalized.startswith("pragma")):
+        raise ValueError("Only read-only SELECT, WITH, and PRAGMA queries are allowed.")
+    if ";" in query.rstrip(";"):
+        raise ValueError("Only one SQLite statement is allowed.")
+
+    bounded_limit = max(1, min(int(limit or 100), 500))
+    with _connect_currency_db() as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(query, params or [])
+        rows = cursor.fetchmany(bounded_limit)
+        columns = [description[0] for description in cursor.description or []]
+    return {
+        "database": str(_currency_db_path()),
+        "columns": columns,
+        "rows": [dict(row) for row in rows],
+        "limit": bounded_limit,
+    }
+
+
 def _tools() -> list[dict[str, Any]]:
     return [
         {
@@ -104,6 +156,24 @@ def _tools() -> list[dict[str, Any]]:
                     "timeout": {"type": "integer", "default": 1800},
                 },
                 "required": ["task"],
+            },
+        },
+        {
+            "name": "currency_sqlite_schema",
+            "description": "Inspect the configured in-world currency SQLite database schema in read-only mode.",
+            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+        {
+            "name": "currency_sqlite_read",
+            "description": "Run a read-only query against the configured in-world currency SQLite database.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "params": {"type": "array", "items": {}},
+                    "limit": {"type": "integer", "default": 100},
+                },
+                "required": ["query"],
             },
         },
     ]
@@ -149,6 +219,16 @@ def _call_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         if not task:
             raise ValueError("task is required")
         return _tool_result(_run([_exe("aider"), "--model", f"ollama_chat/{model}", "--message", task, "--yes-always"], timeout=timeout))
+    if name == "currency_sqlite_schema":
+        return _tool_result(_sqlite_schema())
+    if name == "currency_sqlite_read":
+        return _tool_result(
+            _sqlite_read(
+                str(args.get("query") or ""),
+                args.get("params") or [],
+                int(args.get("limit") or 100),
+            )
+        )
     raise ValueError(f"unknown tool: {name}")
 
 

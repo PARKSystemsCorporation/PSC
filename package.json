@@ -9,6 +9,10 @@
     "stop": "node scripts/project-cli.js stop",
     "logs": "node scripts/project-cli.js logs",
     "logs:llm": "node scripts/project-cli.js logs:llm",
+    "canopy:check": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-canopy-wsl.ps1",
+    "canopy:install-online": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-canopy-wsl-online.ps1",
+    "canopy": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/canopy-dashboard.ps1",
+    "canopy:setup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/canopy-dashboard.ps1 -PrepareWorktrees",
     "mcp:agent": "IPE\\llm-server\\.venv\\Scripts\\python.exe IPE\\mcp\\psc_agent_mcp.py",
     "window": "node scripts/project-cli.js window"
   },

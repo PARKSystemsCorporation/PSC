@@ -67,8 +67,43 @@ It exposes:
 - `git_pull`
 - `ra_aid_task`
 - `aider_task`
+- `currency_sqlite_schema`
+- `currency_sqlite_read`
 
 The MCP server uses the same target workspace and model environment as the IDE.
+
+The SQLite tools are read-only and use `WORLD_CURRENCY_SQLITE` as the database path.
+
+## Canopy Dashboard
+
+From the repo root:
+
+```bash
+npm run canopy
+```
+
+This launches WSL-backed Canopy dashboards for:
+
+- `C:\vestra`
+- `C:\lila`
+
+Use this when you want both primary agents visible at once. Canopy manages the git worktrees and tmux sessions; PSC supplies the local agent commands.
+
+To create default isolated worktrees before opening Canopy:
+
+```bash
+npm run canopy:setup
+```
+
+Canopy requires `tmux` and the `canopy` binary inside WSL. WSL is only the local terminal/session substrate here; PSC does not use Docker or Linux containers.
+
+Check those prerequisites from the repo root without fetching anything:
+
+```bash
+npm run canopy:check
+```
+
+Use `npm run canopy:install-online` only during an approved online maintenance window, or install `tmux`, `git`, and `canopy` from an offline package cache.
 
 ## Local Model Defaults
 
