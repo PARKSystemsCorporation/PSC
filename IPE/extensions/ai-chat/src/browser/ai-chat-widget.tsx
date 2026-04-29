@@ -37,6 +37,23 @@ interface ChatMessage extends GemmaProtocol.Message {
 
 type ChatTab = 'chat' | 'preview';
 
+type ChatMode = 'code' | 'debug';
+
+/**
+ * Footer mode → Ollama tag mapping. Clicking a mode in the footer swaps the
+ * active model on the server. The active mode is inferred from the currently
+ * selected model, so reloads stay consistent without extra persistence.
+ */
+const MODE_MODELS: Record<ChatMode, string> = {
+    code: 'gemma3:27b',
+    debug: 'deepseek-r1:14b',
+};
+
+const MODE_LABELS: Record<ChatMode, { label: string; icon: string; title: string }> = {
+    code: { label: 'Code', icon: 'codicon-code', title: `Coding mode — ${MODE_MODELS.code}` },
+    debug: { label: 'Debug', icon: 'codicon-bug', title: `Debugging mode — ${MODE_MODELS.debug}` },
+};
+
 interface PendingConfirm {
     call: GemmaProtocol.AgentToolCall;
     /** For write_file: existing file content (if any) for diff display. */
@@ -113,8 +130,28 @@ export class AiChatWidget extends ReactWidget {
 
     private async checkConnection(): Promise<void> {
         const health = await this.chatService.checkHealth();
-        this.serverStatus = health ? `${health.model} (${health.backend})` : 'disconnected';
+        if (health) {
+            this.serverStatus = `${health.model} (${health.backend})`;
+            this.modelActive = health.model;
+        } else {
+            this.serverStatus = 'disconnected';
+        }
         this.update();
+    }
+
+    /** Mode currently in effect, inferred from the active model. */
+    private get currentMode(): ChatMode | null {
+        for (const mode of Object.keys(MODE_MODELS) as ChatMode[]) {
+            if (MODE_MODELS[mode] === this.modelActive) return mode;
+        }
+        return null;
+    }
+
+    /** Switch active model to the one mapped to `mode`. No-op if already active. */
+    private async setMode(mode: ChatMode): Promise<void> {
+        const target = MODE_MODELS[mode];
+        if (target === this.modelActive) return;
+        await this.selectModel(target);
     }
 
     private generateId(): string {
@@ -1329,7 +1366,7 @@ export class AiChatWidget extends ReactWidget {
                     </div>
                 )}
 
-                {/* Footer toolbar — terminal toggle + save markdown actions */}
+                {/* Footer toolbar — terminal toggle + mode switcher + save actions */}
                 <div className="gemma-chat-footer">
                     <button
                         className="gemma-foot-btn"
@@ -1339,6 +1376,24 @@ export class AiChatWidget extends ReactWidget {
                         <span className="codicon codicon-terminal" />
                         <span>Terminal</span>
                     </button>
+                    <div className="gemma-mode-switch" role="group" aria-label="Agent mode">
+                        {(Object.keys(MODE_MODELS) as ChatMode[]).map(mode => {
+                            const meta = MODE_LABELS[mode];
+                            const active = this.currentMode === mode;
+                            return (
+                                <button
+                                    key={mode}
+                                    className={`gemma-mode-btn ${active ? 'active' : ''}`}
+                                    title={meta.title}
+                                    onClick={() => this.setMode(mode)}
+                                    disabled={this.isGenerating}
+                                >
+                                    <span className={`codicon ${meta.icon}`} />
+                                    <span>{meta.label}</span>
+                                </button>
+                            );
+                        })}
+                    </div>
                     <div className="gemma-foot-spacer" />
                     <button
                         className="gemma-foot-btn"
@@ -1657,6 +1712,36 @@ export class AiChatWidget extends ReactWidget {
                         opacity: 0.4;
                         cursor: default;
                     }
+                    .gemma-mode-switch {
+                        display: inline-flex;
+                        align-items: center;
+                        gap: 0;
+                        margin-left: 4px;
+                        border: 1px solid var(--theia-panel-border);
+                        border-radius: 4px;
+                        overflow: hidden;
+                    }
+                    .gemma-mode-btn {
+                        display: inline-flex;
+                        align-items: center;
+                        gap: 4px;
+                        background: transparent;
+                        color: inherit;
+                        border: none;
+                        border-right: 1px solid var(--theia-panel-border);
+                        padding: 3px 9px;
+                        cursor: pointer;
+                        font-size: 11px;
+                    }
+                    .gemma-mode-btn:last-child { border-right: none; }
+                    .gemma-mode-btn:hover:not(:disabled):not(.active) {
+                        background: var(--theia-statusBarItem-hoverBackground, rgba(255,255,255,0.12));
+                    }
+                    .gemma-mode-btn.active {
+                        background: var(--theia-button-background, #0e639c);
+                        color: var(--theia-button-foreground, #fff);
+                    }
+                    .gemma-mode-btn:disabled { opacity: 0.4; cursor: default; }
 
                     /* Status pill becomes a button */
                     .gemma-chat-status-btn {

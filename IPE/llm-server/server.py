@@ -81,13 +81,16 @@ ollama_pull_state: dict[str, Any] = {
 # compat /v1/chat/completions endpoint we're already using. The frontend can
 # also pull arbitrary tags via a free-form input.
 OLLAMA_LIBRARY: list[dict[str, Any]] = [
+    {"tag": "gemma3:27b",          "size_gb": 17.0,"label": "Gemma 3 27B",          "description": "Default coding mode. Largest public Gemma; needs ~24GB VRAM or 32GB RAM with CPU spill."},
+    {"tag": "deepseek-r1:14b",     "size_gb": 9.0, "label": "DeepSeek R1 14B",      "description": "Default debugging mode. Reasoning-tuned, strong at root-causing failures and trace analysis."},
+    {"tag": "qwen3-coder:30b",     "size_gb": 18.6,"label": "Qwen 3 Coder 30B (A3B)","description": "Latest Qwen MoE coder — 30B params, ~3B active. Needs ~24GB VRAM (or fast CPU + 32GB RAM)."},
     {"tag": "qwen2.5-coder:7b",    "size_gb": 4.7, "label": "Qwen 2.5 Coder 7B",    "description": "Strong open-source coder, fits on 8GB GPUs."},
     {"tag": "qwen2.5-coder:14b",   "size_gb": 9.0, "label": "Qwen 2.5 Coder 14B",   "description": "Bigger Qwen Coder, ~12GB VRAM."},
-    {"tag": "qwen2.5-coder:32b",   "size_gb": 20.0,"label": "Qwen 2.5 Coder 32B",   "description": "Top-tier Qwen Coder, needs 24GB+ VRAM."},
+    {"tag": "qwen2.5-coder:32b",   "size_gb": 20.0,"label": "Qwen 2.5 Coder 32B",   "description": "Top-tier Qwen 2.5 Coder, needs 24GB+ VRAM."},
     {"tag": "deepseek-coder-v2:16b","size_gb": 9.0,"label": "DeepSeek Coder v2 16B","description": "MoE coder model, balanced speed/quality."},
     {"tag": "llama3.2:3b",         "size_gb": 2.0, "label": "Llama 3.2 3B",         "description": "Tiny, fast general-purpose chat."},
     {"tag": "llama3.1:8b",         "size_gb": 4.7, "label": "Llama 3.1 8B",         "description": "Solid general-purpose 8B."},
-    {"tag": "gemma3:4b",           "size_gb": 3.3, "label": "Gemma 3 4B",           "description": "Default lightweight Gemma."},
+    {"tag": "gemma3:4b",           "size_gb": 3.3, "label": "Gemma 3 4B",           "description": "Lightweight Gemma."},
     {"tag": "gemma3:12b",          "size_gb": 8.1, "label": "Gemma 3 12B",          "description": "Bigger Gemma, ~12GB VRAM."},
     {"tag": "phi3:14b",            "size_gb": 7.9, "label": "Phi 3 Medium 14B",     "description": "Microsoft Phi 3 Medium."},
 ]

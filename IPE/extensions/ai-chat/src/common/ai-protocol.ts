@@ -7,10 +7,10 @@
 export namespace GemmaProtocol {
 
     /**
-     * Base URL for the LLM agent server.
-     * In Docker Compose, nginx proxies /api/* to the LLM server, so we use
-     * a relative URL by default. Override via window.__GEMMA_LLM_URL__ for
-     * custom deployments.
+     * Base URL for the LLM agent server. Native local Windows runs a CORS
+     * proxy on the public IDE port that fans /api/* and /health out to the
+     * Python LLM server, so the default is a relative URL. Override via
+     * window.__GEMMA_LLM_URL__ for custom deployments (e.g. a remote tunnel).
      */
     export const LLM_SERVER_URL: string =
         (typeof window !== 'undefined' && (window as any).__GEMMA_LLM_URL__) || '';

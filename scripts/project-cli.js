@@ -513,6 +513,8 @@ async function startProject() {
     "/api/refactor",
     "/api/explain",
     "/api/setup/",
+    "/api/ollama/",
+    "/api/fs/",
   ];
   const isLlmRoute = (url) => {
     if (!url) return false;

@@ -20,6 +20,7 @@ const modules = [
   "node-pty",
   "nsfw",
   "msgpackr-extract",
+  "@vscode/windows-ca-certs",
 ];
 
 let failed = 0;
@@ -56,3 +57,39 @@ if (failed > 0) {
   process.exit(1);
 }
 console.log("[setup-native] All native modules rebuilt.");
+
+// `yarn install --ignore-scripts` skips postinstall hooks. A few packages
+// (notably @vscode/ripgrep) use postinstall to *download* a prebuilt binary
+// rather than to invoke node-gyp, so it's safe to run those after the
+// MSVC-only rebuild step has finished. Add new download-only postinstalls
+// here as we hit them.
+const postinstallTargets = [
+  { module: "@vscode/ripgrep", script: "lib/postinstall.js", artifact: "bin/rg.exe" },
+];
+
+for (const { module: mod, script, artifact } of postinstallTargets) {
+  const modPath = path.join(projectRoot, "node_modules", mod);
+  if (!fs.existsSync(modPath)) {
+    console.log(`[setup-native] ${mod} not installed; skipping postinstall.`);
+    continue;
+  }
+  if (artifact && fs.existsSync(path.join(modPath, artifact))) {
+    console.log(`[setup-native] ${mod} ${artifact} already present; skipping postinstall.`);
+    continue;
+  }
+
+  process.stdout.write(`[setup-native] Running postinstall for ${mod}... `);
+  const result = spawnSync("node", [script], {
+    cwd: modPath,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  if (result.status === 0) {
+    console.log("ok");
+  } else {
+    console.log("FAILED");
+    process.stdout.write(result.stdout?.toString() ?? "");
+    process.stderr.write(result.stderr?.toString() ?? "");
+    process.exit(1);
+  }
+}
