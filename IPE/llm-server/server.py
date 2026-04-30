@@ -745,20 +745,6 @@ def _extract_json_object(text: str) -> dict[str, Any]:
         return json.loads(repaired)
 
 
-def _looks_like_startup_inspection(task: str) -> bool:
-    text = task.lower()
-    asks_start = any(phrase in text for phrase in [
-        "how to start",
-        "how do i start",
-        "how to run",
-        "how do i run",
-        "start this software",
-        "open this software",
-        "launch this software",
-    ])
-    return asks_start or ("start" in text and any(word in text for word in ["software", "app", "project", "vestra"]))
-
-
 def _looks_like_broad_agent_task(task: str) -> bool:
     text = task.lower()
     if re.search(r"\b(use|run|force)\s+aider\b|\baider\s+(directly|only)\b", text):
@@ -897,19 +883,115 @@ def _inspect_startup(cwd: Path) -> AgentTaskResponse:
     )
 
 
+def _file_contains(path: Path, *patterns: str) -> bool:
+    if not path.exists() or not path.is_file():
+        return False
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace").lower()
+    except OSError:
+        return False
+    return all(pattern.lower() in text for pattern in patterns)
+
+
+def _inspect_pwa(cwd: Path) -> AgentTaskResponse:
+    lines: list[str] = [f"Workspace: {cwd}", "\nPWA inspection:"]
+
+    index_candidates = [cwd / "index.html", cwd / "src" / "index.html"]
+    manifest_candidates = [cwd / "manifest.json", cwd / "public" / "manifest.json", cwd / "src" / "manifest.json"]
+    sw_candidates = [cwd / "sw.js", cwd / "public" / "sw.js", cwd / "src" / "sw.js"]
+    entry_candidates = [cwd / "src" / "main.tsx", cwd / "src" / "main.jsx", cwd / "src" / "main.ts", cwd / "src" / "main.js"]
+
+    index_path = next((path for path in index_candidates if path.exists()), None)
+    manifest_path = next((path for path in manifest_candidates if path.exists()), None)
+    sw_path = next((path for path in sw_candidates if path.exists()), None)
+    entry_path = next((path for path in entry_candidates if path.exists()), None)
+
+    manifest_linked = bool(index_path and _file_contains(index_path, "manifest"))
+    sw_registered = bool(entry_path and (
+        _file_contains(entry_path, "serviceworker", "register")
+        or _file_contains(entry_path, "service-worker", "register")
+        or _file_contains(entry_path, "sw.js", "register")
+    ))
+
+    manifest_valid = False
+    icon_warnings: list[str] = []
+    if manifest_path:
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            required = ["name", "short_name", "start_url", "display", "icons"]
+            missing = [key for key in required if not manifest.get(key)]
+            manifest_valid = not missing
+            if missing:
+                lines.append(f"- Manifest exists at {manifest_path.relative_to(cwd)} but is missing: {', '.join(missing)}")
+            icons = manifest.get("icons") if isinstance(manifest, dict) else None
+            if isinstance(icons, list):
+                for icon in icons:
+                    src = icon.get("src") if isinstance(icon, dict) else None
+                    if not src:
+                        continue
+                    icon_path = (manifest_path.parent / src).resolve()
+                    if not icon_path.exists():
+                        icon_warnings.append(src)
+        except json.JSONDecodeError as error:
+            lines.append(f"- Manifest exists at {manifest_path.relative_to(cwd)} but is not valid JSON: {error.msg} at line {error.lineno}.")
+        except OSError as error:
+            lines.append(f"- Manifest exists at {manifest_path.relative_to(cwd)} but could not be read: {error}.")
+    else:
+        lines.append("- No manifest file found in root, public, or src.")
+
+    if index_path:
+        lines.append(f"- HTML entry: {index_path.relative_to(cwd)}")
+    else:
+        lines.append("- No HTML entry file found.")
+    lines.append(f"- Manifest file: {manifest_path.relative_to(cwd) if manifest_path else 'missing'}")
+    lines.append(f"- Manifest linked from HTML: {'yes' if manifest_linked else 'no'}")
+    lines.append(f"- Service worker file: {sw_path.relative_to(cwd) if sw_path else 'missing'}")
+    lines.append(f"- Service worker registered in app entry: {'yes' if sw_registered else 'no'}")
+    if icon_warnings:
+        lines.append(f"- Manifest references missing icon files: {', '.join(icon_warnings)}")
+
+    ready = bool(manifest_path and manifest_valid and manifest_linked and sw_path and sw_registered and not icon_warnings)
+    lines.append("\nConclusion:")
+    if ready:
+        lines.append("Vestra appears configured as an installable PWA at the file/config level.")
+    else:
+        lines.append("Vestra is not fully configured as a PWA yet.")
+        lines.append("Required fixes should be delegated to supervised aider, then verified with a build/preview check.")
+
+    return AgentTaskResponse(
+        engine="hermes",
+        command="inspect_pwa",
+        cwd=str(cwd),
+        exit_code=0,
+        stdout="\n".join(lines),
+        stderr="",
+        timed_out=False,
+    )
+
+
+def _run_inspector(tool: str, cwd: Path) -> AgentTaskResponse:
+    if tool == "inspect_startup":
+        return _inspect_startup(cwd)
+    if tool == "inspect_pwa":
+        return _inspect_pwa(cwd)
+    return _inspect_startup(cwd)
+
+
 async def _ask_hermes_manager(task: str, cwd: Path) -> dict[str, Any]:
     memory = _read_manager_memory(cwd)
     memory_block = memory if memory else "(No MEMORY.md, AGENTS.md, CLAUDE.md, or memory.md found.)"
     prompt = f"""You are Lila Agent, the always-on local coding-agent manager for PARK Systems Coder.
 
 Choose the right local action for this request:
-- inspect: read local startup/project files directly for run/start questions.
+- inspect_startup: read local startup/project files directly for run/start/open questions.
+- inspect_pwa: inspect whether the project is actually configured as a Progressive Web App.
 - aider: supervised local coding motor for edits, feature work, setup changes, PWA/service-worker/manifest work, dependency changes, and refactors.
 
 PSC will seed relevant project files and run supervised revisions around aider, so choose aider for coding work even when files must be discovered.
+Do not use startup inspection for PWA questions. Questions about whether PWA work is complete should use inspect_pwa.
 
 Return only compact JSON with this schema:
-{{"tool":"inspect"|"aider","rationale":"short user-visible reason","delegated_task":"the exact task for the chosen tool"}}
+{{"tool":"inspect_startup"|"inspect_pwa"|"aider","rationale":"short user-visible reason","delegated_task":"the exact task for the chosen tool"}}
 
 Project memory:
 {memory_block}
@@ -929,7 +1011,10 @@ User request:
     content = await _complete_backend(payload, model_override=_get_hermes_model_name())
     decision = _extract_json_object(content)
     tool = str(decision.get("tool", "")).strip().lower()
-    if tool not in {"inspect", "aider"}:
+    task_text = task.lower()
+    if tool == "inspect":
+        decision["tool"] = "inspect_pwa" if any(term in task_text for term in ["pwa", "progressive web app", "manifest", "service worker", "installable"]) else "inspect_startup"
+    elif tool not in {"inspect_startup", "inspect_pwa", "aider"}:
         decision["tool"] = "aider"
     elif tool == "aider" and _looks_like_broad_agent_task(task):
         decision["tool"] = "aider"
@@ -1742,13 +1827,11 @@ async def run_agent_task(request: AgentTaskRequest):
     cwd = _resolve_execution_cwd(request.cwd)
     timeout = max(1, min(request.timeout, 3600))
     if request.engine.strip().lower() == "hermes":
-        if _looks_like_startup_inspection(request.task):
-            return _inspect_startup(cwd)
         try:
             decision = await _ask_hermes_manager(request.task, cwd)
             delegated_engine = str(decision.get("tool", "aider")).strip().lower()
-            if delegated_engine == "inspect":
-                return _inspect_startup(cwd)
+            if delegated_engine.startswith("inspect_"):
+                return _run_inspector(delegated_engine, cwd)
             request = AgentTaskRequest(
                 task=str(decision.get("delegated_task") or request.task),
                 engine=delegated_engine,
@@ -1810,17 +1893,9 @@ async def run_agent_task_stream(request: AgentTaskRequest):
     async def event_stream() -> AsyncIterator[str]:
         motor_request = request
         if request.engine.strip().lower() == "hermes":
-            if _looks_like_startup_inspection(request.task):
-                yield await emit({
-                    "type": "status",
-                    "message": "Lila Agent recognized this as a startup inspection and is reading local project files directly.",
-                })
-                yield await emit({"type": "done", "result": _inspect_startup(cwd).model_dump()})
-                yield "[DONE]"
-                return
             yield await emit({
                 "type": "status",
-                "message": f"Lila Agent is reading project memory and choosing a motor function ({_get_hermes_model_name()}).",
+                "message": f"Lila Agent is reading project memory and choosing a local action ({_get_hermes_model_name()}).",
             })
             try:
                 decision = await _ask_hermes_manager(request.task, cwd)
@@ -1831,8 +1906,8 @@ async def run_agent_task_stream(request: AgentTaskRequest):
                     "type": "status",
                     "message": f"Lila Agent chose {delegated_engine}: {rationale}",
                 })
-                if delegated_engine == "inspect":
-                    yield await emit({"type": "done", "result": _inspect_startup(cwd).model_dump()})
+                if delegated_engine.startswith("inspect_"):
+                    yield await emit({"type": "done", "result": _run_inspector(delegated_engine, cwd).model_dump()})
                     yield "[DONE]"
                     return
                 motor_request = AgentTaskRequest(
