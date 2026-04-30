@@ -46,13 +46,13 @@ function New-AgentCommand {
         if (-not (Test-Path $aider)) {
             throw "aider.exe was not found at $aider"
         }
-        return "Set-Location -LiteralPath '$Workspace'; `$env:PSC_TARGET_WORKSPACE='$Workspace'; `$env:HERMES_MODEL='hermes3:8b'; `$env:LLM_MODEL='$ModelName'; `$env:OLLAMA_BASE_URL='http://127.0.0.1:11434'; Write-Host '[$Label] Hermes-managed aider motor on $Workspace'; & '$aider' --model 'ollama_chat/$ModelName'"
+        return "Set-Location -LiteralPath '$Workspace'; `$env:PSC_TARGET_WORKSPACE='$Workspace'; `$env:HERMES_MODEL='hermes3:8b'; `$env:LLM_MODEL='$ModelName'; `$env:OLLAMA_BASE_URL='http://127.0.0.1:11434'; Write-Host '[$Label] Lila Agent-managed aider motor on $Workspace'; & '$aider' --model 'ollama_chat/$ModelName'"
     }
 
     if (-not (Test-Path $raAid)) {
         throw "ra-aid.exe was not found at $raAid"
     }
-    return "Set-Location -LiteralPath '$Workspace'; `$env:PSC_TARGET_WORKSPACE='$Workspace'; `$env:HERMES_MODEL='hermes3:8b'; `$env:LLM_MODEL='$ModelName'; `$env:OLLAMA_BASE_URL='http://127.0.0.1:11434'; Write-Host '[$Label] Hermes-managed RA.Aid + aider motor on $Workspace'; & '$raAid' --provider ollama --model '$ModelName' --num-ctx '8192' --expert-provider ollama --expert-model '$ModelName' --expert-num-ctx '8192' --use-aider --log-mode console"
+    return "Set-Location -LiteralPath '$Workspace'; `$env:PSC_TARGET_WORKSPACE='$Workspace'; `$env:HERMES_MODEL='hermes3:8b'; `$env:LLM_MODEL='$ModelName'; `$env:OLLAMA_BASE_URL='http://127.0.0.1:11434'; Write-Host '[$Label] Lila Agent-managed RA.Aid + aider motor on $Workspace'; & '$raAid' --provider ollama --model '$ModelName' --num-ctx '8192' --expert-provider ollama --expert-model '$ModelName' --expert-num-ctx '8192' --use-aider --log-mode console"
 }
 
 Assert-Path $VestraPath
@@ -68,7 +68,7 @@ $vestraCommand = New-AgentCommand -Workspace $VestraPath -Label "Vestra" -ModelN
 $lilaCommand = New-AgentCommand -Workspace $LilaPath -Label "Lila" -ModelName $modelName -AiderOnly:$UseAiderOnly
 
 if (Get-Command wt.exe -ErrorAction SilentlyContinue) {
-    & wt.exe new-tab --title "Hermes - Vestra" powershell.exe -NoExit -NoProfile -ExecutionPolicy Bypass -Command $vestraCommand `; new-tab --title "Hermes - Lila" powershell.exe -NoExit -NoProfile -ExecutionPolicy Bypass -Command $lilaCommand
+    & wt.exe new-tab --title "Lila Agent - Vestra" powershell.exe -NoExit -NoProfile -ExecutionPolicy Bypass -Command $vestraCommand `; new-tab --title "Lila Agent - Lila" powershell.exe -NoExit -NoProfile -ExecutionPolicy Bypass -Command $lilaCommand
 } else {
     Start-Process powershell.exe -ArgumentList @("-NoExit", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $vestraCommand)
     Start-Process powershell.exe -ArgumentList @("-NoExit", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $lilaCommand)

@@ -13,22 +13,22 @@ import { AiCompletionProvider } from './ai-completion-provider';
 export namespace CompletionCommands {
     export const TRIGGER: Command = {
         id: 'gemma.triggerCompletion',
-        label: 'Gemma AI: Trigger Inline Completion',
+        label: 'PARK Systems Coder: Trigger Inline Completion',
         category: 'AI',
     };
     export const ACCEPT: Command = {
         id: 'gemma.acceptCompletion',
-        label: 'Gemma AI: Accept Inline Completion',
+        label: 'PARK Systems Coder: Accept Inline Completion',
         category: 'AI',
     };
     export const DISMISS: Command = {
         id: 'gemma.dismissCompletion',
-        label: 'Gemma AI: Dismiss Inline Completion',
+        label: 'PARK Systems Coder: Dismiss Inline Completion',
         category: 'AI',
     };
     export const TOGGLE: Command = {
         id: 'gemma.toggleCompletion',
-        label: 'Gemma AI: Toggle Inline Completions',
+        label: 'PARK Systems Coder: Toggle Inline Completions',
         category: 'AI',
     };
 }

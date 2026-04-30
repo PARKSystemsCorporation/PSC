@@ -11,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
-echo "Starting Gemma Theia IDE (local mode)..."
+echo "Starting PARK Systems Coder (local mode)..."
 
 # Load environment
 if [ -f .env ]; then
@@ -35,7 +35,7 @@ LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
 
 echo ""
 echo "════════════════════════════════════════════"
-echo "  Gemma Theia IDE is running!"
+echo "  PARK Systems Coder is running!"
 echo "════════════════════════════════════════════"
 echo ""
 echo "  Desktop:  http://localhost:${IDE_PORT:-3000}"

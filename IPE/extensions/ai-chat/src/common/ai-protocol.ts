@@ -122,7 +122,7 @@ export namespace GemmaProtocol {
         timed_out: boolean;
     }
 
-    /** Hermes/RA.Aid/aider task request */
+    /** Lila Agent/RA.Aid/aider task request */
     export interface AgentTaskRequest {
         task: string;
         engine?: 'hermes' | 'ra-aid' | 'aider';

@@ -15,7 +15,7 @@ NC='\033[0m'
 
 echo -e "${BLUE}"
 echo "╔══════════════════════════════════════════╗"
-echo "║     Gemma Theia IDE — Setup Wizard       ║"
+echo "║     PARK Systems Coder Setup Wizard      ║"
 echo "╚══════════════════════════════════════════╝"
 echo -e "${NC}"
 

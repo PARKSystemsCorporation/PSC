@@ -1,7 +1,7 @@
 {
   "name": "gemma-ai-chat",
   "version": "1.0.0",
-  "description": "Gemma 4 AI Chat Agent — sidebar panel with streaming conversations, code generation, refactoring, and debugging",
+  "description": "PARK Systems Coder chat panel with Lila Agent orchestration, streaming conversations, code generation, refactoring, and debugging",
   "keywords": ["theia-extension"],
   "license": "MIT",
   "files": ["lib", "src"],

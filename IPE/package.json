@@ -2,7 +2,7 @@
   "name": "gemma-theia-ide",
   "version": "1.0.0",
   "private": true,
-  "description": "AI-powered coding IDE built on Eclipse Theia with Gemma 4 agent capabilities and mobile/iPad connectivity",
+  "description": "PARK Systems Coder, a local AI coding IDE built on Eclipse Theia with Lila Agent orchestration and mobile/iPad connectivity",
   "license": "MIT",
   "scripts": {
     "clean": "lerna clean && rimraf node_modules",

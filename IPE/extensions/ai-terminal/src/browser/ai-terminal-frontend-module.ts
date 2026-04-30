@@ -16,7 +16,7 @@ import { AiTerminalWidget, AI_TERMINAL_WIDGET_ID } from './ai-terminal-widget';
 
 const TOGGLE_TERMINAL_AGENT: Command = {
     id: 'gemma.toggleTerminalAgent',
-    label: 'Gemma AI: Toggle Terminal Agent',
+    label: 'PARK Systems Coder: Toggle Terminal Agent',
     category: 'AI',
 };
 

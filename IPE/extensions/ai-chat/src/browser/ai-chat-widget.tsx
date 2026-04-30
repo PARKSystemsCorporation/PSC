@@ -69,7 +69,7 @@ const MAX_TOOL_ITERATIONS = 12;
 export class AiChatWidget extends ReactWidget {
 
     static readonly ID = AI_CHAT_WIDGET_ID;
-    static readonly LABEL = 'Hermes Coder';
+    static readonly LABEL = 'PARK Systems Coder';
 
     @inject(AiChatService)
     protected readonly chatService!: AiChatService;
@@ -120,7 +120,7 @@ export class AiChatWidget extends ReactWidget {
     protected init(): void {
         this.id = AiChatWidget.ID;
         this.title.label = AiChatWidget.LABEL;
-        this.title.caption = 'Hermes local coding manager';
+        this.title.caption = 'Lila Agent local coding manager';
         this.title.iconClass = 'codicon codicon-circuit-board';
         this.title.closable = true;
         this.addClass('gemma-ai-chat-widget');
@@ -348,10 +348,7 @@ export class AiChatWidget extends ReactWidget {
         this.update();
         this.scrollToBottom();
 
-        const approved = await this.confirmTool(call);
-        const result = approved
-            ? await this.runAgentTask(call, assistantMsg)
-            : { ok: false, error: 'user denied' };
+        const result = await this.runAgentTask(call, assistantMsg);
 
         this.messages.push({
             id: this.generateId(),
@@ -379,6 +376,7 @@ export class AiChatWidget extends ReactWidget {
                 this.update();
                 this.scrollToBottom();
             }
+            this.abortController = new AbortController();
             const data = await this.chatService.streamAgentTask({
                 task: call.args.task,
                 engine: call.args.engine,
@@ -387,9 +385,17 @@ export class AiChatWidget extends ReactWidget {
             }, event => {
                 if (!liveMsg) return;
                 this.appendAgentActivity(liveMsg, event);
-            });
+            }, this.abortController.signal);
             return { ok: true, result: data };
         } catch (err: any) {
+            if (err?.name === 'AbortError') {
+                if (liveMsg) {
+                    liveMsg.content += `${liveMsg.content.endsWith('\n') ? '' : '\n'}[stopped] Agent task stopped by user.\n`;
+                    this.update();
+                    this.scrollToBottom();
+                }
+                return { ok: false, error: 'stopped by user' };
+            }
             return { ok: false, error: err?.message || String(err) };
         }
     }
@@ -427,8 +433,9 @@ export class AiChatWidget extends ReactWidget {
         const output = [data.stdout, data.stderr].filter(Boolean).join('\n').trim();
         const details = output ? `\n\n\`\`\`text\n${output.slice(0, 5000)}\n\`\`\`` : '';
         const label =
+            data.engine === 'hermes' ? 'Lila Agent' :
             call.name === 'aider_task' ? 'aider' :
-            call.name === 'hermes_task' ? `Hermes -> ${data.engine}` :
+            call.name === 'hermes_task' ? `Lila Agent -> ${data.engine}` :
             'RA.Aid + aider';
         return `${label} finished with exit code ${data.exit_code}.${details}`;
     }
@@ -718,8 +725,8 @@ export class AiChatWidget extends ReactWidget {
     private buildIdeAwarePrompt(userRequest: string): string {
         const editorContext = this.getEditorContext();
         const contextLines = [
-            '[Hermes Coder request]',
-            'You are running inside PSC Hermes Coder, a VS Code-style local autonomous coding workspace with an AI chat sidebar, editor integration, inline completion, refactoring, and a terminal agent panel.',
+            '[PARK Systems Coder request]',
+            'You are running inside PARK Systems Coder, a VS Code-style local autonomous coding workspace with Lila Agent in the chat sidebar, editor integration, inline completion, refactoring, and a terminal agent panel.',
             this.agentMode
                 ? 'Agent mode is ON: you have workspace tools for reading files, listing directories, writing files after approval, and running commands after approval. For coding work, use those tools instead of claiming you can only generate text.'
                 : 'Agent mode is OFF: answer conversationally without workspace tool calls.',
@@ -911,7 +918,7 @@ export class AiChatWidget extends ReactWidget {
     private buildMarkdownTranscript(assistantOnly: boolean): string {
         const stamp = new Date().toISOString();
         const header = [
-            `# Hermes Coder Conversation`,
+            `# PARK Systems Coder Conversation`,
             ``,
             `_Saved ${stamp}_`,
             ``,
@@ -925,7 +932,7 @@ export class AiChatWidget extends ReactWidget {
 
         const body = this.messages
             .map(m => {
-                const heading = m.role === 'user' ? '## You' : '## Hermes';
+                const heading = m.role === 'user' ? '## You' : '## Lila Agent';
                 return `${heading}\n\n${m.content.trim()}\n`;
             })
             .join('\n');
@@ -937,7 +944,7 @@ export class AiChatWidget extends ReactWidget {
         const roots = this.workspaceService.tryGetRoots();
         const root = roots[0]?.resource;
         if (!root) {
-            this.messageService.warn('Open a workspace folder before saving Hermes notes.');
+            this.messageService.warn('Open a workspace folder before saving Lila Agent notes.');
             return;
         }
 
@@ -1520,7 +1527,7 @@ export class AiChatWidget extends ReactWidget {
 
     private renderAgentControlPanel(): React.ReactNode {
         const routes: Array<{ id: AgentRoute; label: string; icon: string; title: string }> = [
-            { id: 'hermes', label: 'Hermes', icon: 'codicon-circuit-board', title: 'Always-on manager that delegates to RA.Aid or aider' },
+            { id: 'hermes', label: 'Lila Agent', icon: 'codicon-circuit-board', title: 'Always-on manager that delegates to RA.Aid or aider' },
             { id: 'ra-aid', label: 'RA.Aid', icon: 'codicon-rocket', title: 'Force the senior engineer motor function for this task' },
             { id: 'aider', label: 'aider', icon: 'codicon-tools', title: 'Force the focused editor motor function for this task' },
         ];
@@ -1573,12 +1580,12 @@ export class AiChatWidget extends ReactWidget {
                     </button>
                     <button
                         className="gemma-agent-action"
-                        title="Launch two Hermes-managed local agents for separate project folders"
+                        title="Launch two Lila Agent-managed local agents for separate project folders"
                         disabled={this.isGenerating}
                         onClick={() => this.runShortcutCommand('Launch dual native agents', 'npm.cmd run agents:dual', 120)}
                     >
                         <span className="codicon codicon-run-all" />
-                        <span>Dual Hermes</span>
+                        <span>Dual Lila</span>
                     </button>
                     <button
                         className="gemma-agent-action"
@@ -1613,11 +1620,11 @@ export class AiChatWidget extends ReactWidget {
                 <div className="gemma-chat-header">
                     <div className="gemma-chat-title">
                         <span className="codicon codicon-circuit-board" />
-                        <span>Hermes Coder</span>
+                        <span>PARK Systems Coder</span>
                     </div>
                     <button
                         className={`gemma-agent-toggle ${this.agentMode ? 'on' : 'off'}`}
-                        title={this.agentMode ? 'Agent mode ON - Hermes can delegate to RA.Aid/aider and run approved workspace tools' : 'Agent mode OFF - chat-only'}
+                        title={this.agentMode ? 'Agent mode ON - Lila Agent can delegate to RA.Aid/aider and run approved workspace tools' : 'Agent mode OFF - chat-only'}
                         onClick={() => { this.agentMode = !this.agentMode; this.update(); }}
                         disabled={this.isGenerating}
                     >
@@ -1647,14 +1654,14 @@ export class AiChatWidget extends ReactWidget {
                         <div className="gemma-chat-messages">
                             {this.messages.length === 0 && (
                                 <div className="gemma-chat-welcome">
-                                    <h3>Hermes Command Console</h3>
-                                    <p>Hermes manages coding work. It delegates to RA.Aid or aider when useful, and Canopy handles multi-worktree supervision.</p>
+                                    <h3>Lila Agent Console</h3>
+                                    <p>Lila Agent manages coding work. It delegates to RA.Aid or aider when useful, and Canopy handles multi-worktree supervision.</p>
                                     <div className="gemma-welcome-grid">
                                         <button onClick={() => { this.agentRoute = 'hermes'; this.inputValue = 'Build this end to end:'; this.update(); }}>
-                                            <span className="codicon codicon-circuit-board" /> Ask Hermes
+                                            <span className="codicon codicon-circuit-board" /> Ask Lila
                                         </button>
-                                        <button onClick={() => this.runShortcutCommand('Launch dual Hermes agents', 'npm.cmd run agents:dual', 120)}>
-                                            <span className="codicon codicon-run-all" /> Dual Hermes
+                                        <button onClick={() => this.runShortcutCommand('Launch dual Lila Agent sessions', 'npm.cmd run agents:dual', 120)}>
+                                            <span className="codicon codicon-run-all" /> Dual Lila
                                         </button>
                                         <button onClick={() => this.runShortcutCommand('Prepare smart worktrees', 'npm.cmd run canopy:setup', 300)}>
                                             <span className="codicon codicon-git-branch" /> Smart Worktrees
@@ -1673,7 +1680,7 @@ export class AiChatWidget extends ReactWidget {
                             <textarea
                                 className="gemma-chat-input"
                                 value={this.inputValue}
-                                placeholder="Ask Hermes to build..."
+                                placeholder="Ask Lila Agent to build..."
                                 rows={2}
                                 onChange={e => { this.inputValue = (e.target as HTMLTextAreaElement).value; this.update(); }}
                                 onKeyDown={e => {

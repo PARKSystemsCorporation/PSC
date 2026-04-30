@@ -1,4 +1,4 @@
-# PSC Gemma Theia IDE
+# PARK Systems Coder
 
 This is the Theia application inside the PSC repo. It provides the browser IDE, chat UI, completion/refactor extensions, and the FastAPI bridge that connects the IDE to local models and agent tools.
 
@@ -105,13 +105,13 @@ npm run canopy:check
 
 Use `npm run canopy:install-online` only during an approved online maintenance window, or install `tmux`, `git`, and `canopy` from an offline package cache.
 
-Before WSL/Canopy is ready, you can still launch two native Windows Hermes-managed agents:
+Before WSL/Canopy is ready, you can still launch two native Windows Lila Agent-managed agents:
 
 ```bash
 npm run agents:dual
 ```
 
-This opens Hermes-managed RA.Aid/aider motor sessions for `C:\vestra` and `C:\lila` in separate terminal tabs.
+This opens Lila Agent-managed RA.Aid/aider motor sessions for `C:\vestra` and `C:\lila` in separate terminal tabs.
 
 ## Local Model Defaults
 

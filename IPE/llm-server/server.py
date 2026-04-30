@@ -1,5 +1,5 @@
 """
-Gemma Theia IDE - LLM Agent Server
+PARK Systems Coder - LLM Agent Server
 ====================================
 FastAPI server that proxies requests to llama.cpp or vLLM backends,
 providing a unified OpenAI-compatible API for the Theia IDE extensions.
@@ -8,6 +8,7 @@ providing a unified OpenAI-compatible API for the Theia IDE extensions.
 import asyncio
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -43,7 +44,7 @@ def load_config() -> dict:
         "llamacpp": {"server_url": "http://llama-server:8080"},
         "vllm": {"server_url": "http://vllm-server:8000", "model_name": "google/gemma-4-12b-it"},
         "agent": {
-            "chat_system_prompt": "You are Gemma, an expert AI coding assistant.",
+            "chat_system_prompt": "You are Lila Agent, the expert AI coding manager inside PARK Systems Coder.",
             "completion_system_prompt": "You are a code completion engine.",
             "terminal_system_prompt": "You are an autonomous terminal agent.",
             "max_tokens": {"chat": 4096, "completion": 256, "terminal": 2048},
@@ -109,7 +110,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Gemma Theia IDE - LLM Agent Server",
+    title="PARK Systems Coder - LLM Agent Server",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -656,20 +657,105 @@ def _extract_json_object(text: str) -> dict[str, Any]:
     end = text.rfind("}")
     if start == -1 or end == -1 or end <= start:
         raise ValueError("manager response did not contain a JSON object")
-    return json.loads(text[start:end + 1])
+    raw = text[start:end + 1]
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        # Local Windows paths such as C:\vestra often come back from small
+        # models as invalid JSON escapes. Make only invalid backslashes literal.
+        repaired = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', raw)
+        return json.loads(repaired)
+
+
+def _looks_like_startup_inspection(task: str) -> bool:
+    text = task.lower()
+    asks_start = any(phrase in text for phrase in [
+        "how to start",
+        "how do i start",
+        "how to run",
+        "how do i run",
+        "start this software",
+        "open this software",
+        "launch this software",
+    ])
+    return asks_start or ("start" in text and any(word in text for word in ["software", "app", "project", "vestra"]))
+
+
+def _is_ra_aid_available() -> tuple[bool, str]:
+    try:
+        __import__("ra_aid")
+        return True, ""
+    except Exception as error:
+        return False, str(error)
+
+
+def _read_json_file(path: Path) -> dict[str, Any]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _inspect_startup(cwd: Path) -> AgentTaskResponse:
+    lines: list[str] = [f"Workspace: {cwd}"]
+    package_path = cwd / "package.json"
+    env_example = cwd / ".env.example"
+    dev_script = cwd / "scripts" / "dev.mjs"
+
+    package_data = _read_json_file(package_path)
+    scripts = package_data.get("scripts") if isinstance(package_data, dict) else None
+    if isinstance(scripts, dict) and scripts:
+        lines.append("\nDetected package scripts:")
+        for name in ["dev", "dev:vite", "dev:server", "build", "preview", "typecheck"]:
+            if name in scripts:
+                lines.append(f"- npm run {name}: {scripts[name]}")
+
+    if dev_script.exists():
+        try:
+            text = dev_script.read_text(encoding="utf-8", errors="replace")
+            ports = sorted(set(re.findall(r"\b(?:[1-9]\d{3,4})\b", text)))
+            if ports:
+                lines.append(f"\nDev orchestrator mentions ports: {', '.join(ports)}")
+        except OSError:
+            pass
+
+    if env_example.exists():
+        lines.append("\nEnvironment setup:")
+        lines.append("- Copy .env.example to .env if .env is missing.")
+        lines.append("- Fill VITE_GOOGLE_MAPS_API_KEY for the map UI.")
+        lines.append("- Optional Google OAuth values are needed for Calendar/Gmail/Tasks/Drive integrations.")
+        lines.append("- Optional OLLAMA_MODEL controls the local chat model.")
+
+    lines.append("\nStart command:")
+    lines.append("1. cd /d C:\\vestra")
+    lines.append("2. bun install   (only if dependencies are missing)")
+    lines.append("3. npm run dev")
+    lines.append("\nExpected services:")
+    lines.append("- Frontend: http://localhost:5173")
+    lines.append("- Backend API: http://localhost:3001")
+
+    return AgentTaskResponse(
+        engine="hermes",
+        command="inspect_startup",
+        cwd=str(cwd),
+        exit_code=0,
+        stdout="\n".join(lines),
+        stderr="",
+        timed_out=False,
+    )
 
 
 async def _ask_hermes_manager(task: str, cwd: Path) -> dict[str, Any]:
     memory = _read_manager_memory(cwd)
     memory_block = memory if memory else "(No MEMORY.md, AGENTS.md, CLAUDE.md, or memory.md found.)"
-    prompt = f"""You are Hermes, the always-on local coding-agent manager.
+    prompt = f"""You are Lila Agent, the always-on local coding-agent manager for PARK Systems Coder.
 
 Choose the right motor function for this request:
 - ra-aid: senior engineer for repo inspection, research, planning, multi-step work, and broad refactors.
 - aider: junior editor for surgical edits when the target files and change are already clear.
 
 Return only compact JSON with this schema:
-{{"tool":"ra-aid"|"aider","rationale":"short user-visible reason","delegated_task":"the exact task for the chosen tool"}}
+{{"tool":"inspect"|"ra-aid"|"aider","rationale":"short user-visible reason","delegated_task":"the exact task for the chosen tool"}}
 
 Project memory:
 {memory_block}
@@ -679,7 +765,7 @@ User request:
 """
     payload = {
         "messages": [
-            {"role": "system", "content": "You are Hermes, a concise local coding-agent manager. Return only valid JSON."},
+            {"role": "system", "content": "You are Lila Agent, a concise local coding-agent manager. Return only valid JSON."},
             {"role": "user", "content": prompt},
         ],
         "max_tokens": 900,
@@ -689,7 +775,7 @@ User request:
     content = await _complete_backend(payload, model_override=_get_hermes_model_name())
     decision = _extract_json_object(content)
     tool = str(decision.get("tool", "")).strip().lower()
-    if tool not in {"ra-aid", "aider"}:
+    if tool not in {"inspect", "ra-aid", "aider"}:
         decision["tool"] = "ra-aid"
     if not str(decision.get("delegated_task", "")).strip():
         decision["delegated_task"] = task
@@ -1327,6 +1413,25 @@ async def execute_command(request: ExecuteRequest):
 # ---------------------------------------------------------------------------
 
 async def _agent_process_events(request: AgentTaskRequest, cwd: Path, timeout: int) -> AsyncIterator[dict[str, Any]]:
+    if request.engine.strip().lower() in {"ra", "raid", "ra.aid", "ra-aid"}:
+        available, reason = _is_ra_aid_available()
+        if not available:
+            response = AgentTaskResponse(
+                engine="ra-aid",
+                command="ra-aid dependency check",
+                cwd=str(cwd),
+                exit_code=1,
+                stdout="",
+                stderr=f"RA.Aid is not available in the current Python environment: {reason}",
+                timed_out=False,
+            )
+            yield {
+                "type": "status",
+                "message": "RA.Aid is currently unavailable; its Python dependency set needs repair.",
+            }
+            yield {"type": "done", "result": response.model_dump()}
+            return
+
     engine, args = _build_agent_command(request)
     display_command = subprocess.list2cmdline(args) if os.name == "nt" else " ".join(shlex.quote(arg) for arg in args)
     stdout_parts: list[str] = []
@@ -1395,6 +1500,16 @@ async def _agent_process_events(request: AgentTaskRequest, cwd: Path, timeout: i
                 break
             yield event
     finally:
+        if process.returncode is None:
+            try:
+                process.terminate()
+                await asyncio.wait_for(process.wait(), timeout=3.0)
+            except Exception:
+                try:
+                    process.kill()
+                    await process.wait()
+                except Exception:
+                    pass
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -1420,9 +1535,15 @@ async def run_agent_task(request: AgentTaskRequest):
     cwd = _resolve_execution_cwd(request.cwd)
     timeout = max(1, min(request.timeout, 3600))
     if request.engine.strip().lower() == "hermes":
+        if _looks_like_startup_inspection(request.task):
+            return _inspect_startup(cwd)
         try:
             decision = await _ask_hermes_manager(request.task, cwd)
             delegated_engine = str(decision.get("tool", "ra-aid")).strip().lower()
+            if delegated_engine == "inspect":
+                return _inspect_startup(cwd)
+            if delegated_engine == "ra-aid" and not _is_ra_aid_available()[0]:
+                delegated_engine = "aider"
             request = AgentTaskRequest(
                 task=str(decision.get("delegated_task") or request.task),
                 engine=delegated_engine,
@@ -1474,7 +1595,7 @@ async def run_agent_task(request: AgentTaskRequest):
 
 @app.post("/api/agent/task/stream")
 async def run_agent_task_stream(request: AgentTaskRequest):
-    """Run Hermes manager, RA.Aid, or aider and stream a live activity log."""
+    """Run Lila Agent manager, RA.Aid, or aider and stream a live activity log."""
     cwd = _resolve_execution_cwd(request.cwd)
     timeout = max(1, min(request.timeout, 3600))
 
@@ -1484,9 +1605,17 @@ async def run_agent_task_stream(request: AgentTaskRequest):
     async def event_stream() -> AsyncIterator[str]:
         motor_request = request
         if request.engine.strip().lower() == "hermes":
+            if _looks_like_startup_inspection(request.task):
+                yield await emit({
+                    "type": "status",
+                    "message": "Lila Agent recognized this as a startup inspection and is reading local project files directly.",
+                })
+                yield await emit({"type": "done", "result": _inspect_startup(cwd).model_dump()})
+                yield "[DONE]"
+                return
             yield await emit({
                 "type": "status",
-                "message": f"Hermes manager is reading project memory and choosing a motor function ({_get_hermes_model_name()}).",
+                "message": f"Lila Agent is reading project memory and choosing a motor function ({_get_hermes_model_name()}).",
             })
             try:
                 decision = await _ask_hermes_manager(request.task, cwd)
@@ -1495,8 +1624,18 @@ async def run_agent_task_stream(request: AgentTaskRequest):
                 rationale = str(decision.get("rationale") or "Delegating to the safest available tool.")
                 yield await emit({
                     "type": "status",
-                    "message": f"Hermes chose {delegated_engine}: {rationale}",
+                    "message": f"Lila Agent chose {delegated_engine}: {rationale}",
                 })
+                if delegated_engine == "inspect":
+                    yield await emit({"type": "done", "result": _inspect_startup(cwd).model_dump()})
+                    yield "[DONE]"
+                    return
+                if delegated_engine == "ra-aid" and not _is_ra_aid_available()[0]:
+                    yield await emit({
+                        "type": "status",
+                        "message": "RA.Aid is unavailable in this venv, so Lila Agent is falling back to aider.",
+                    })
+                    delegated_engine = "aider"
                 motor_request = AgentTaskRequest(
                     task=delegated_task,
                     engine=delegated_engine,
@@ -1507,7 +1646,7 @@ async def run_agent_task_stream(request: AgentTaskRequest):
             except Exception as error:
                 yield await emit({
                     "type": "status",
-                    "message": f"Hermes manager failed ({error}); falling back to RA.Aid.",
+                    "message": f"Lila Agent manager failed ({error}); falling back to RA.Aid.",
                 })
                 motor_request = AgentTaskRequest(
                     task=request.task,

@@ -1,5 +1,5 @@
 """
-Gemma Theia IDE - Model Manager
+PARK Systems Coder - Model Manager
 =================================
 Handles downloading, validating, and managing Gemma 4 model files.
 Supports both GGUF (llama.cpp) and HuggingFace (vLLM) formats.

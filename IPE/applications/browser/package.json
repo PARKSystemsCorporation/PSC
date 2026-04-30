@@ -2,7 +2,7 @@
   "name": "gemma-theia-browser",
   "version": "1.0.0",
   "private": true,
-  "description": "PSC Hermes Coder - Browser Application",
+  "description": "PARK Systems Coder - Browser Application",
   "dependencies": {
     "@theia/core": "1.54.0",
     "@theia/editor": "1.54.0",
@@ -46,7 +46,7 @@
     "target": "browser",
     "frontend": {
       "config": {
-        "applicationName": "Hermes Coder",
+        "applicationName": "PARK Systems Coder",
         "defaultTheme": "dark",
         "preferences": {
           "editor.fontSize": 14,

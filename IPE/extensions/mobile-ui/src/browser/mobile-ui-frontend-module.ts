@@ -47,7 +47,7 @@ class MobileUIContribution implements FrontendApplicationContribution {
 
         const appTitle = document.createElement('meta');
         appTitle.setAttribute('name', 'apple-mobile-web-app-title');
-        appTitle.setAttribute('content', 'Gemma IDE');
+        appTitle.setAttribute('content', 'PARK Systems Coder');
         document.head.appendChild(appTitle);
 
         // Theme color

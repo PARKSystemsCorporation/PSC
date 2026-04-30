@@ -1,7 +1,7 @@
 {
   "name": "gemma-ai-completion",
   "version": "1.0.0",
-  "description": "Gemma 4 inline code completion — ghost text suggestions powered by local AI",
+  "description": "PARK Systems Coder inline code completion — ghost text suggestions powered by local AI",
   "keywords": ["theia-extension"],
   "license": "MIT",
   "files": ["lib", "src"],

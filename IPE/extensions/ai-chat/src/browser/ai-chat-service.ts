@@ -255,11 +255,13 @@ export class AiChatService {
     async streamAgentTask(
         request: GemmaProtocol.AgentTaskRequest,
         onEvent: (event: GemmaProtocol.AgentTaskEvent) => void,
+        signal?: AbortSignal,
     ): Promise<GemmaProtocol.AgentTaskResponse> {
         const resp = await fetch(`${this._serverUrl}/api/agent/task/stream`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(request),
+            signal,
         });
 
         if (!resp.ok) {

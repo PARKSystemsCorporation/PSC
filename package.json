@@ -1,7 +1,7 @@
 {
   "name": "psc",
   "private": true,
-  "description": "Root launcher for the Gemma Theia IDE workspace",
+  "description": "Root launcher for the PARK Systems Coder workspace",
   "scripts": {
     "setup": "node scripts/project-cli.js setup",
     "bootstrap": "node scripts/project-cli.js bootstrap",

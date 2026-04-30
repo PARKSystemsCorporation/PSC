@@ -37,7 +37,7 @@ export class ConnectionManagerWidget extends ReactWidget {
     protected init(): void {
         this.id = ConnectionManagerWidget.ID;
         this.title.label = ConnectionManagerWidget.LABEL;
-        this.title.caption = 'Gemma Setup';
+        this.title.caption = 'PARK Systems Coder Setup';
         this.title.iconClass = 'codicon codicon-settings-gear';
         this.title.closable = true;
         this.addClass('gemma-connection-widget');

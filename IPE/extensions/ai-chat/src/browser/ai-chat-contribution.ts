@@ -18,22 +18,22 @@ import { AiChatWidget, AI_CHAT_WIDGET_ID } from './ai-chat-widget';
 export namespace GemmaCommands {
     export const TOGGLE_CHAT: Command = {
         id: 'gemma.toggleChat',
-        label: 'Hermes Coder: Toggle Chat Panel',
+        label: 'PARK Systems Coder: Toggle Chat Panel',
         category: 'AI',
     };
     export const EXPLAIN_CODE: Command = {
         id: 'gemma.explainCode',
-        label: 'Hermes Coder: Explain Selected Code',
+        label: 'PARK Systems Coder: Explain Selected Code',
         category: 'AI',
     };
     export const REFACTOR_CODE: Command = {
         id: 'gemma.refactorCode',
-        label: 'Hermes Coder: Refactor Selected Code',
+        label: 'PARK Systems Coder: Refactor Selected Code',
         category: 'AI',
     };
     export const FIX_CODE: Command = {
         id: 'gemma.fixCode',
-        label: 'Hermes Coder: Fix Errors in Selected Code',
+        label: 'PARK Systems Coder: Fix Errors in Selected Code',
         category: 'AI',
     };
 }
@@ -48,7 +48,7 @@ export class AiChatContribution extends AbstractViewContribution<AiChatWidget>
     constructor(@unmanaged() _viewOptions: unknown) {
         super({
             widgetId: AI_CHAT_WIDGET_ID,
-            widgetName: 'Hermes Coder',
+            widgetName: 'PARK Systems Coder',
             defaultWidgetOptions: {
                 area: 'right',
                 rank: 100,

@@ -28,7 +28,7 @@ export class AiTerminalWidget extends ReactWidget {
     protected init(): void {
         this.id = AiTerminalWidget.ID;
         this.title.label = AiTerminalWidget.LABEL;
-        this.title.caption = 'Gemma AI Terminal Agent';
+        this.title.caption = 'PARK Systems Coder Terminal Agent';
         this.title.iconClass = 'codicon codicon-terminal';
         this.title.closable = true;
         this.addClass('gemma-terminal-agent-widget');

@@ -16,8 +16,8 @@ import { ConnectionManagerWidget, CONNECTION_MANAGER_WIDGET_ID } from './connect
 
 const TOGGLE_CONNECTIONS: Command = {
     id: 'gemma.openSetup',
-    label: 'Gemma: Open Setup',
-    category: 'Gemma',
+    label: 'PARK Systems Coder: Open Setup',
+    category: 'PARK Systems Coder',
 };
 
 @injectable()

@@ -1,7 +1,7 @@
 {
   "name": "gemma-ai-terminal",
   "version": "1.0.0",
-  "description": "Gemma 4 Terminal Agent — autonomous multi-step task execution in the integrated terminal",
+  "description": "PARK Systems Coder Terminal Agent — autonomous multi-step task execution in the integrated terminal",
   "keywords": ["theia-extension"],
   "license": "MIT",
   "files": ["lib", "src"],

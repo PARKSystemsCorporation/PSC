@@ -1,6 +1,6 @@
 # PSC - PARK Systems Corporation Open Source
 
-## Gemma Theia IDE (Native Local Edition)
+## PARK Systems Coder (Native Local Edition)
 
 PSC is a local-first coding IDE built on [Eclipse Theia](https://theia-ide.org/). It runs natively on Windows, serves the IDE through a local proxy, and uses local Ollama models for chat/completion while delegating serious coding work to open-source agent tools:
 
@@ -48,7 +48,7 @@ Telegram has been removed from the default runtime path. PSC is now focused on f
 | `npm run canopy` | Launch Canopy dashboards for Vestra and Lila |
 | `npm run canopy:setup` | Create default Canopy git worktrees, then launch dashboards |
 | `npm run canopy:install-online` | Optional online maintenance helper for WSL/tmux/Canopy setup |
-| `npm run agents:dual` | Launch two native Windows Hermes-managed agent sessions for Vestra and Lila |
+| `npm run agents:dual` | Launch two native Windows Lila Agent-managed sessions for Vestra and Lila |
 | `npm run mcp:agent` | Start the PSC MCP agent server over stdio |
 
 ---
@@ -112,7 +112,7 @@ Need two autonomous agents before WSL/Canopy is ready? Use the native Windows fa
 npm run agents:dual
 ```
 
-That opens two terminal tabs and runs Hermes-managed RA.Aid/aider motor sessions in `C:\vestra` and `C:\lila` at the same time. It does not provide Canopy's supervision UI, but it gives you immediate parallel autonomous work without Docker, containers, or WSL.
+That opens two terminal tabs and runs Lila Agent-managed RA.Aid/aider motor sessions in `C:\vestra` and `C:\lila` at the same time. It does not provide Canopy's supervision UI, but it gives you immediate parallel autonomous work without Docker, containers, or WSL.
 
 Then launch both project dashboards from Windows:
 

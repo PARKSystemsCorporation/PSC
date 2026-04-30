@@ -93,7 +93,7 @@ html, body {
         flex-wrap: nowrap !important;
     }
 
-    /* Gemma AI chat: wider input */
+    /* PARK Systems Coder chat: wider input */
     .gemma-chat-input {
         font-size: 16px !important; /* Prevents iOS zoom on focus */
     }

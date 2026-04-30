@@ -571,7 +571,7 @@ async function startProject() {
   server.listen(publicPort, "0.0.0.0");
 
   log("");
-  log("Gemma Theia IDE is running natively.");
+  log("PARK Systems Coder is running natively.");
   log(`Desktop: http://localhost:${publicPort}`);
   log(`Mobile:  http://${getLocalIpAddress()}:${publicPort}`);
   log(`Workspace: ${workspaceMount}`);
