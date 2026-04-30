@@ -834,55 +834,6 @@ def _read_json_file(path: Path) -> dict[str, Any]:
         return {}
 
 
-def _inspect_startup(cwd: Path) -> AgentTaskResponse:
-    lines: list[str] = [f"Workspace: {cwd}"]
-    package_path = cwd / "package.json"
-    env_example = cwd / ".env.example"
-    dev_script = cwd / "scripts" / "dev.mjs"
-
-    package_data = _read_json_file(package_path)
-    scripts = package_data.get("scripts") if isinstance(package_data, dict) else None
-    if isinstance(scripts, dict) and scripts:
-        lines.append("\nDetected package scripts:")
-        for name in ["dev", "dev:vite", "dev:server", "build", "preview", "typecheck"]:
-            if name in scripts:
-                lines.append(f"- npm run {name}: {scripts[name]}")
-
-    if dev_script.exists():
-        try:
-            text = dev_script.read_text(encoding="utf-8", errors="replace")
-            ports = sorted(set(re.findall(r"\b(?:[1-9]\d{3,4})\b", text)))
-            if ports:
-                lines.append(f"\nDev orchestrator mentions ports: {', '.join(ports)}")
-        except OSError:
-            pass
-
-    if env_example.exists():
-        lines.append("\nEnvironment setup:")
-        lines.append("- Copy .env.example to .env if .env is missing.")
-        lines.append("- Fill VITE_GOOGLE_MAPS_API_KEY for the map UI.")
-        lines.append("- Optional Google OAuth values are needed for Calendar/Gmail/Tasks/Drive integrations.")
-        lines.append("- Optional OLLAMA_MODEL controls the local chat model.")
-
-    lines.append("\nStart command:")
-    lines.append("1. cd /d C:\\vestra")
-    lines.append("2. bun install   (only if dependencies are missing)")
-    lines.append("3. npm run dev")
-    lines.append("\nExpected services:")
-    lines.append("- Frontend: http://localhost:5173")
-    lines.append("- Backend API: http://localhost:3001")
-
-    return AgentTaskResponse(
-        engine="hermes",
-        command="inspect_startup",
-        cwd=str(cwd),
-        exit_code=0,
-        stdout="\n".join(lines),
-        stderr="",
-        timed_out=False,
-    )
-
-
 def _file_contains(path: Path, *patterns: str) -> bool:
     if not path.exists() or not path.is_file():
         return False
@@ -893,8 +844,94 @@ def _file_contains(path: Path, *patterns: str) -> bool:
     return all(pattern.lower() in text for pattern in patterns)
 
 
-def _inspect_pwa(cwd: Path) -> AgentTaskResponse:
-    lines: list[str] = [f"Workspace: {cwd}", "\nPWA inspection:"]
+def _safe_read_text(path: Path, max_chars: int = 2000) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")[:max_chars]
+    except OSError:
+        return ""
+
+
+def _append_package_evidence(lines: list[str], cwd: Path) -> None:
+    package_path = cwd / "package.json"
+    package_data = _read_json_file(package_path)
+    scripts = package_data.get("scripts") if isinstance(package_data, dict) else None
+    if isinstance(scripts, dict) and scripts:
+        lines.append("\nPackage scripts:")
+        for name, command in scripts.items():
+            lines.append(f"- npm run {name}: {command}")
+
+    dev_script = cwd / "scripts" / "dev.mjs"
+    if dev_script.exists():
+        text = _safe_read_text(dev_script, 6000)
+        ports = sorted(set(re.findall(r"\b(?:[1-9]\d{3,4})\b", text)))
+        if ports:
+            lines.append(f"\nDetected port references: {', '.join(ports)}")
+
+
+def _append_git_evidence(lines: list[str], cwd: Path) -> None:
+    try:
+        result = subprocess.run(
+            ["git", "status", "--short"],
+            cwd=str(cwd),
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+        status = result.stdout.strip()
+        lines.append("\nGit status:")
+        lines.append(status if status else "- clean")
+    except Exception as error:
+        lines.append(f"\nGit status unavailable: {error}")
+
+
+def _append_file_evidence(lines: list[str], cwd: Path, task: str) -> None:
+    seeded_files = _aider_seed_files(cwd, task)
+    if not seeded_files:
+        lines.append("\nRelevant file candidates:")
+        lines.append("- No likely project files were found from the generic seed list.")
+        return
+
+    lines.append("\nRelevant file candidates:")
+    for rel in seeded_files:
+        path = cwd / rel
+        size = path.stat().st_size if path.exists() else 0
+        lines.append(f"- {rel} ({size} bytes)")
+
+    snippet_terms = [
+        "manifest",
+        "serviceworker",
+        "service-worker",
+        "register",
+        "offline",
+        "script",
+        "dev",
+        "build",
+        "vite",
+        "electron",
+        "tauri",
+    ]
+    matching_lines: list[str] = []
+    for rel in seeded_files[:12]:
+        path = cwd / rel
+        text = _safe_read_text(path, 12000)
+        for index, line in enumerate(text.splitlines(), start=1):
+            lowered = line.lower()
+            if any(term in lowered for term in snippet_terms):
+                clean = line.strip()
+                if clean:
+                    matching_lines.append(f"- {rel}:{index}: {clean[:180]}")
+            if len(matching_lines) >= 18:
+                break
+        if len(matching_lines) >= 18:
+            break
+
+    if matching_lines:
+        lines.append("\nRelevant local matches:")
+        lines.extend(matching_lines)
+
+
+def _append_pwa_evidence(lines: list[str], cwd: Path) -> None:
+    lines.append("\nPWA-related evidence:")
 
     index_candidates = [cwd / "index.html", cwd / "src" / "index.html"]
     manifest_candidates = [cwd / "manifest.json", cwd / "public" / "manifest.json", cwd / "src" / "manifest.json"]
@@ -951,16 +988,30 @@ def _inspect_pwa(cwd: Path) -> AgentTaskResponse:
         lines.append(f"- Manifest references missing icon files: {', '.join(icon_warnings)}")
 
     ready = bool(manifest_path and manifest_valid and manifest_linked and sw_path and sw_registered and not icon_warnings)
-    lines.append("\nConclusion:")
     if ready:
-        lines.append("Vestra appears configured as an installable PWA at the file/config level.")
+        lines.append("- Evidence supports an installable PWA configuration at the file/config level.")
     else:
-        lines.append("Vestra is not fully configured as a PWA yet.")
-        lines.append("Required fixes should be delegated to supervised aider, then verified with a build/preview check.")
+        lines.append("- Evidence does not support a complete PWA configuration yet.")
 
+
+def _inspect_project(cwd: Path, task: str) -> AgentTaskResponse:
+    lines: list[str] = [
+        f"Workspace: {cwd}",
+        f"Inspection request: {task}",
+    ]
+    _append_git_evidence(lines, cwd)
+    _append_package_evidence(lines, cwd)
+    _append_file_evidence(lines, cwd, task)
+
+    task_text = task.lower()
+    if any(term in task_text for term in ["pwa", "progressive web app", "service worker", "manifest", "installable", "offline"]):
+        _append_pwa_evidence(lines, cwd)
+
+    lines.append("\nConclusion:")
+    lines.append("Inspection complete from local workspace evidence. If the request requires changing files, route the next step to supervised aider.")
     return AgentTaskResponse(
         engine="hermes",
-        command="inspect_pwa",
+        command="inspect",
         cwd=str(cwd),
         exit_code=0,
         stdout="\n".join(lines),
@@ -969,29 +1020,23 @@ def _inspect_pwa(cwd: Path) -> AgentTaskResponse:
     )
 
 
-def _run_inspector(tool: str, cwd: Path) -> AgentTaskResponse:
-    if tool == "inspect_startup":
-        return _inspect_startup(cwd)
-    if tool == "inspect_pwa":
-        return _inspect_pwa(cwd)
-    return _inspect_startup(cwd)
-
-
 async def _ask_hermes_manager(task: str, cwd: Path) -> dict[str, Any]:
     memory = _read_manager_memory(cwd)
     memory_block = memory if memory else "(No MEMORY.md, AGENTS.md, CLAUDE.md, or memory.md found.)"
     prompt = f"""You are Lila Agent, the always-on local coding-agent manager for PARK Systems Coder.
 
-Choose the right local action for this request:
-- inspect_startup: read local startup/project files directly for run/start/open questions.
-- inspect_pwa: inspect whether the project is actually configured as a Progressive Web App.
-- aider: supervised local coding motor for edits, feature work, setup changes, PWA/service-worker/manifest work, dependency changes, and refactors.
+First classify the user request, then choose the right local action.
 
-PSC will seed relevant project files and run supervised revisions around aider, so choose aider for coding work even when files must be discovered.
-Do not use startup inspection for PWA questions. Questions about whether PWA work is complete should use inspect_pwa.
+Available actions:
+- inspect: read local workspace evidence and answer questions about current project state, files, setup, configuration, or why something happened.
+- aider: supervised local coding motor for edits, implementation, setup changes, dependency changes, refactors, repairs, and verification loops.
+
+Choose inspect when the user is asking "what is true right now?" and no file changes are needed.
+Choose aider when the user wants files changed, installed, fixed, created, upgraded, or made complete.
+If a task is broad, set requires_planning=true. PSC will turn that into supervised revisions and file-seed aider, so do not ask the user to add files.
 
 Return only compact JSON with this schema:
-{{"tool":"inspect_startup"|"inspect_pwa"|"aider","rationale":"short user-visible reason","delegated_task":"the exact task for the chosen tool"}}
+{{"tool":"inspect"|"aider","requires_coding":true|false,"requires_planning":true|false,"rationale":"short user-visible reason","delegated_task":"the exact task for the chosen action"}}
 
 Project memory:
 {memory_block}
@@ -1011,18 +1056,20 @@ User request:
     content = await _complete_backend(payload, model_override=_get_hermes_model_name())
     decision = _extract_json_object(content)
     tool = str(decision.get("tool", "")).strip().lower()
-    task_text = task.lower()
-    if tool == "inspect":
-        decision["tool"] = "inspect_pwa" if any(term in task_text for term in ["pwa", "progressive web app", "manifest", "service worker", "installable"]) else "inspect_startup"
-    elif tool not in {"inspect_startup", "inspect_pwa", "aider"}:
+    if tool not in {"inspect", "aider"}:
         decision["tool"] = "aider"
     elif tool == "aider" and _looks_like_broad_agent_task(task):
         decision["tool"] = "aider"
         decision["rationale"] = "This looks like app-wide implementation work, so Lila Agent will supervise file-seeded aider revisions."
-    if not str(decision.get("delegated_task", "")).strip():
+        decision["requires_coding"] = True
+        decision["requires_planning"] = True
+    delegated_task = str(decision.get("delegated_task", "")).strip()
+    if not delegated_task or delegated_task.lower() in {"inspect", "aider", "check", "review", "continue", "update"}:
         decision["delegated_task"] = task
     if not str(decision.get("rationale", "")).strip():
         decision["rationale"] = "Defaulting to the safest implementation path."
+    decision["requires_coding"] = bool(decision.get("requires_coding", decision["tool"] == "aider"))
+    decision["requires_planning"] = bool(decision.get("requires_planning", _looks_like_broad_agent_task(task)))
     return decision
 
 
@@ -1830,8 +1877,9 @@ async def run_agent_task(request: AgentTaskRequest):
         try:
             decision = await _ask_hermes_manager(request.task, cwd)
             delegated_engine = str(decision.get("tool", "aider")).strip().lower()
-            if delegated_engine.startswith("inspect_"):
-                return _run_inspector(delegated_engine, cwd)
+            if delegated_engine == "inspect":
+                delegated_task = str(decision.get("delegated_task") or request.task)
+                return _inspect_project(cwd, delegated_task)
             request = AgentTaskRequest(
                 task=str(decision.get("delegated_task") or request.task),
                 engine=delegated_engine,
@@ -1906,8 +1954,8 @@ async def run_agent_task_stream(request: AgentTaskRequest):
                     "type": "status",
                     "message": f"Lila Agent chose {delegated_engine}: {rationale}",
                 })
-                if delegated_engine.startswith("inspect_"):
-                    yield await emit({"type": "done", "result": _run_inspector(delegated_engine, cwd).model_dump()})
+                if delegated_engine == "inspect":
+                    yield await emit({"type": "done", "result": _inspect_project(cwd, delegated_task).model_dump()})
                     yield "[DONE]"
                     return
                 motor_request = AgentTaskRequest(
