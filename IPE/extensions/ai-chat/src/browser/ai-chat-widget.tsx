@@ -27,6 +27,8 @@ export const AI_CHAT_WIDGET_ID = 'gemma-ai-chat';
 interface ChatMessage extends GemmaProtocol.Message {
     id: string;
     isStreaming?: boolean;
+    /** Ephemeral agent heartbeat, rendered in place so repeated status events do not spam chat. */
+    agentWorkingText?: string;
     /** Synthetic tool-result messages — rendered as a card, not as user text. */
     toolResult?: GemmaProtocol.AgentToolResult;
     /** Tool call extracted from this assistant message — rendered as a card. */
@@ -390,6 +392,7 @@ export class AiChatWidget extends ReactWidget {
         } catch (err: any) {
             if (err?.name === 'AbortError') {
                 if (liveMsg) {
+                    liveMsg.agentWorkingText = undefined;
                     liveMsg.content += `${liveMsg.content.endsWith('\n') ? '' : '\n'}[stopped] Agent task stopped by user.\n`;
                     this.update();
                     this.scrollToBottom();
@@ -403,16 +406,26 @@ export class AiChatWidget extends ReactWidget {
     private appendAgentActivity(msg: ChatMessage, event: GemmaProtocol.AgentTaskEvent): void {
         let line = '';
         if (event.type === 'status' && event.message) {
+            const workingMatch = event.message.match(/^(.+?)\s+is still working\.{3}$/i);
+            if (workingMatch) {
+                msg.agentWorkingText = `${workingMatch[1]} is working`;
+                this.update();
+                this.scrollToBottom();
+                return;
+            }
             line = `[status] ${event.message}`;
             if (event.command) {
                 line += `\n[command] ${event.command}`;
             }
         } else if (event.type === 'log' && event.text) {
+            msg.agentWorkingText = undefined;
             const prefix = event.stream === 'stderr' ? '[stderr]' : '[stdout]';
             line = `${prefix} ${event.text.replace(/\s+$/g, '')}`;
         } else if (event.type === 'done' && event.result) {
+            msg.agentWorkingText = undefined;
             line = `[done] ${event.result.engine} exited with code ${event.result.exit_code}${event.result.timed_out ? ' (timed out)' : ''}`;
         } else if (event.type === 'error') {
+            msg.agentWorkingText = undefined;
             line = `[error] ${event.error || 'Agent task failed'}`;
         }
         if (!line) return;
@@ -1158,6 +1171,13 @@ export class AiChatWidget extends ReactWidget {
                 </div>
                 <div className="gemma-message-content">
                     {msg.content && this.renderMessageContent(msg.content)}
+                    {msg.agentWorkingText && (
+                        <div className="gemma-agent-working" aria-live="polite">
+                            <span className="codicon codicon-loading gemma-agent-working-icon" />
+                            <span className="gemma-agent-working-text">{msg.agentWorkingText}</span>
+                            <span className="gemma-agent-working-dots" aria-hidden="true" />
+                        </div>
+                    )}
                     {msg.toolCall && this.renderToolCallCard(msg.toolCall)}
                     {msg.isStreaming && <span className="gemma-cursor-blink">▊</span>}
                 </div>
@@ -2049,9 +2069,43 @@ export class AiChatWidget extends ReactWidget {
                     .gemma-cursor-blink {
                         animation: blink 0.8s infinite;
                     }
+                    .gemma-agent-working {
+                        display: inline-flex;
+                        align-items: center;
+                        gap: 6px;
+                        margin-top: 6px;
+                        color: var(--theia-descriptionForeground);
+                        font-family: var(--theia-editor-font-family, var(--theia-code-font-family), 'Consolas', 'Courier New', monospace);
+                        font-size: 12px;
+                        white-space: nowrap;
+                    }
+                    .gemma-agent-working-icon {
+                        font-size: 13px;
+                        animation: gemma-agent-spin 1.1s linear infinite;
+                    }
+                    .gemma-agent-working-text {
+                        display: inline-block;
+                    }
+                    .gemma-agent-working-dots::after {
+                        content: '';
+                        display: inline-block;
+                        width: 18px;
+                        text-align: left;
+                        animation: gemma-agent-dots 1.2s steps(4, end) infinite;
+                    }
                     @keyframes blink {
                         0%, 50% { opacity: 1; }
                         51%, 100% { opacity: 0; }
+                    }
+                    @keyframes gemma-agent-spin {
+                        from { transform: rotate(0deg); }
+                        to { transform: rotate(360deg); }
+                    }
+                    @keyframes gemma-agent-dots {
+                        0% { content: ''; }
+                        25% { content: '.'; }
+                        50% { content: '..'; }
+                        75%, 100% { content: '...'; }
                     }
 
                     /* Preview tab */
