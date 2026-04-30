@@ -779,6 +779,57 @@ def _looks_like_broad_agent_task(task: str) -> bool:
     return not (file_hint and tiny_edit)
 
 
+def _looks_like_workspace_state_question(task: str) -> bool:
+    text = task.lower()
+    question_signal = "?" in task or re.search(
+        r"\b(is|are|was|were|did|does|do|has|have|can|could|should|why|what|where|when|how)\b",
+        text,
+    )
+    state_signal = any(term in text for term in [
+        "now",
+        "currently",
+        "already",
+        "completed",
+        "done",
+        "working",
+        "running",
+        "configured",
+        "installed",
+        "available",
+        "issue",
+        "error",
+        "why",
+        "what's going on",
+    ])
+    workspace_signal = any(term in text for term in [
+        "project",
+        "repo",
+        "workspace",
+        "app",
+        "application",
+        "vestra",
+        "psc",
+        "lila",
+        "agent",
+        "file",
+        "files",
+    ]) or bool(re.search(r"[a-zA-Z]:\\|[/\\][\w.-]+", task))
+    change_signal = any(term in text for term in [
+        "change",
+        "fix",
+        "implement",
+        "create",
+        "add",
+        "remove",
+        "upgrade",
+        "install",
+        "wrap",
+        "make ",
+        "build",
+    ])
+    return bool(question_signal and state_signal and workspace_signal and not change_signal)
+
+
 def _aider_seed_files(cwd: Path, task: str) -> list[str]:
     """Add likely project files to one-shot aider runs so it can edit, not ask for paths."""
     text = task.lower()
@@ -832,6 +883,20 @@ def _read_json_file(path: Path) -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "y", "1"}:
+            return True
+        if normalized in {"false", "no", "n", "0", ""}:
+            return False
+    if value is None:
+        return default
+    return bool(value)
 
 
 def _file_contains(path: Path, *patterns: str) -> bool:
@@ -930,7 +995,7 @@ def _append_file_evidence(lines: list[str], cwd: Path, task: str) -> None:
         lines.extend(matching_lines)
 
 
-def _append_pwa_evidence(lines: list[str], cwd: Path) -> None:
+def _append_pwa_evidence(lines: list[str], cwd: Path) -> bool:
     lines.append("\nPWA-related evidence:")
 
     index_candidates = [cwd / "index.html", cwd / "src" / "index.html"]
@@ -992,6 +1057,7 @@ def _append_pwa_evidence(lines: list[str], cwd: Path) -> None:
         lines.append("- Evidence supports an installable PWA configuration at the file/config level.")
     else:
         lines.append("- Evidence does not support a complete PWA configuration yet.")
+    return ready
 
 
 def _inspect_project(cwd: Path, task: str) -> AgentTaskResponse:
@@ -1004,11 +1070,17 @@ def _inspect_project(cwd: Path, task: str) -> AgentTaskResponse:
     _append_file_evidence(lines, cwd, task)
 
     task_text = task.lower()
+    pwa_ready: bool | None = None
     if any(term in task_text for term in ["pwa", "progressive web app", "service worker", "manifest", "installable", "offline"]):
-        _append_pwa_evidence(lines, cwd)
+        pwa_ready = _append_pwa_evidence(lines, cwd)
 
     lines.append("\nConclusion:")
-    lines.append("Inspection complete from local workspace evidence. If the request requires changing files, route the next step to supervised aider.")
+    if pwa_ready is True:
+        lines.append("Yes, the local file evidence supports this being configured as a PWA.")
+    elif pwa_ready is False:
+        lines.append("No, the local file evidence does not show a complete PWA setup. What would you like to do next?")
+    else:
+        lines.append("Inspection complete from local workspace evidence. If you want changes made, I can route that to the coding tool next.")
     return AgentTaskResponse(
         engine="hermes",
         command="inspect",
@@ -1025,18 +1097,26 @@ async def _ask_hermes_manager(task: str, cwd: Path) -> dict[str, Any]:
     memory_block = memory if memory else "(No MEMORY.md, AGENTS.md, CLAUDE.md, or memory.md found.)"
     prompt = f"""You are Lila Agent, the always-on local coding-agent manager for PARK Systems Coder.
 
-First classify the user request, then choose the right local action.
+First respond to the user in normal conversational language. Then decide whether coding or local workspace tools are needed after that response.
 
 Available actions:
+- respond: answer conversationally without tools. This is the default for normal questions, architecture discussion, clarification, and advice.
 - inspect: read local workspace evidence and answer questions about current project state, files, setup, configuration, or why something happened.
 - aider: supervised local coding motor for edits, implementation, setup changes, dependency changes, refactors, repairs, and verification loops.
 
-Choose inspect when the user is asking "what is true right now?" and no file changes are needed.
-Choose aider when the user wants files changed, installed, fixed, created, upgraded, or made complete.
+Choose respond when you can answer from conversation context and no file evidence is required.
+Choose inspect when you need to check files before answering, but no file changes are requested.
+Choose aider only when the user clearly wants files changed, installed, fixed, created, upgraded, or made complete.
+Never answer current project/workspace state from memory; choose inspect for that.
 If a task is broad, set requires_planning=true. PSC will turn that into supervised revisions and file-seed aider, so do not ask the user to add files.
 
+Your user-facing message should say what you are doing next. Examples:
+- "I'm not sure from chat alone, so I'll check the workspace."
+- "That sounds like an implementation change, so I'll inspect the project shape and then hand it to the coding tool."
+- "No tools needed for that one; here's the short version..."
+
 Return only compact JSON with this schema:
-{{"tool":"inspect"|"aider","requires_coding":true|false,"requires_planning":true|false,"rationale":"short user-visible reason","delegated_task":"the exact task for the chosen action"}}
+{{"message":"short conversational response to show the user first","tool":"respond"|"inspect"|"aider","requires_coding":true|false,"requires_planning":true|false,"rationale":"short internal reason","delegated_task":"the exact task for the chosen action"}}
 
 Project memory:
 {memory_block}
@@ -1056,8 +1136,12 @@ User request:
     content = await _complete_backend(payload, model_override=_get_hermes_model_name())
     decision = _extract_json_object(content)
     tool = str(decision.get("tool", "")).strip().lower()
-    if tool not in {"inspect", "aider"}:
-        decision["tool"] = "aider"
+    if tool not in {"respond", "inspect", "aider"}:
+        decision["tool"] = "respond"
+    elif tool == "respond" and _looks_like_workspace_state_question(task):
+        decision["tool"] = "inspect"
+        decision["message"] = "I'm not sure from chat alone, so I'll check the local workspace."
+        decision["rationale"] = "This asks about current workspace state, so local evidence is needed before answering."
     elif tool == "aider" and _looks_like_broad_agent_task(task):
         decision["tool"] = "aider"
         decision["rationale"] = "This looks like app-wide implementation work, so Lila Agent will supervise file-seeded aider revisions."
@@ -1066,10 +1150,19 @@ User request:
     delegated_task = str(decision.get("delegated_task", "")).strip()
     if not delegated_task or delegated_task.lower() in {"inspect", "aider", "check", "review", "continue", "update"}:
         decision["delegated_task"] = task
+    elif re.search(r"[a-zA-Z]:\\|[/\\][\w.-]+", task) and not re.search(r"[a-zA-Z]:\\|[/\\][\w.-]+", delegated_task):
+        decision["delegated_task"] = task
     if not str(decision.get("rationale", "")).strip():
         decision["rationale"] = "Defaulting to the safest implementation path."
-    decision["requires_coding"] = bool(decision.get("requires_coding", decision["tool"] == "aider"))
-    decision["requires_planning"] = bool(decision.get("requires_planning", _looks_like_broad_agent_task(task)))
+    if not str(decision.get("message", "")).strip():
+        if decision["tool"] == "inspect":
+            decision["message"] = "I'm not sure from chat alone, so I'll check the local workspace."
+        elif decision["tool"] == "aider":
+            decision["message"] = "That needs a code change, so I'll hand it to the local coding tool."
+        else:
+            decision["message"] = "No tools needed for that one."
+    decision["requires_coding"] = _coerce_bool(decision.get("requires_coding"), decision["tool"] == "aider")
+    decision["requires_planning"] = _coerce_bool(decision.get("requires_planning"), _looks_like_broad_agent_task(task))
     return decision
 
 
@@ -1877,9 +1970,22 @@ async def run_agent_task(request: AgentTaskRequest):
         try:
             decision = await _ask_hermes_manager(request.task, cwd)
             delegated_engine = str(decision.get("tool", "aider")).strip().lower()
+            manager_message = str(decision.get("message") or "").strip()
+            if delegated_engine == "respond":
+                return AgentTaskResponse(
+                    engine="hermes",
+                    command="respond",
+                    cwd=str(cwd),
+                    exit_code=0,
+                    stdout=manager_message or str(decision.get("rationale") or "").strip(),
+                    stderr="",
+                )
             if delegated_engine == "inspect":
                 delegated_task = str(decision.get("delegated_task") or request.task)
-                return _inspect_project(cwd, delegated_task)
+                response = _inspect_project(cwd, delegated_task)
+                if manager_message:
+                    response.stdout = f"{manager_message}\n\n{response.stdout}"
+                return response
             request = AgentTaskRequest(
                 task=str(decision.get("delegated_task") or request.task),
                 engine=delegated_engine,
@@ -1887,13 +1993,14 @@ async def run_agent_task(request: AgentTaskRequest):
                 timeout=timeout,
                 use_aider=False,
             )
-        except Exception:
-            request = AgentTaskRequest(
-                task=request.task,
-                engine="aider",
+        except Exception as error:
+            return AgentTaskResponse(
+                engine="hermes",
+                command="respond",
                 cwd=str(cwd),
-                timeout=timeout,
-                use_aider=False,
+                exit_code=1,
+                stdout="I could not classify that cleanly, so I stopped before using any coding tools.",
+                stderr=str(error),
             )
 
     engine, args = _build_agent_command(request)
@@ -1950,10 +2057,31 @@ async def run_agent_task_stream(request: AgentTaskRequest):
                 delegated_engine = str(decision.get("tool", "aider")).strip().lower()
                 delegated_task = str(decision.get("delegated_task") or request.task)
                 rationale = str(decision.get("rationale") or "Delegating to the safest available tool.")
+                manager_message = str(decision.get("message") or "").strip()
+                if manager_message:
+                    yield await emit({
+                        "type": "log",
+                        "stream": "stdout",
+                        "text": manager_message + "\n",
+                    })
                 yield await emit({
                     "type": "status",
                     "message": f"Lila Agent chose {delegated_engine}: {rationale}",
                 })
+                if delegated_engine == "respond":
+                    yield await emit({
+                        "type": "done",
+                        "result": AgentTaskResponse(
+                            engine="hermes",
+                            command="respond",
+                            cwd=str(cwd),
+                            exit_code=0,
+                            stdout=manager_message,
+                            stderr="",
+                        ).model_dump(),
+                    })
+                    yield "[DONE]"
+                    return
                 if delegated_engine == "inspect":
                     yield await emit({"type": "done", "result": _inspect_project(cwd, delegated_task).model_dump()})
                     yield "[DONE]"
@@ -1970,17 +2098,21 @@ async def run_agent_task_stream(request: AgentTaskRequest):
             except Exception as error:
                 yield await emit({
                     "type": "status",
-                    "message": f"Lila Agent manager failed ({error}); falling back to file-seeded aider.",
+                    "message": f"Lila Agent manager failed ({error}); stopping before using coding tools.",
                 })
-                motor_request = AgentTaskRequest(
-                    task=request.task,
-                    engine="aider",
-                    cwd=str(cwd),
-                    timeout=timeout,
-                    use_aider=False,
-                    max_revisions=request.max_revisions,
-                    steering_context=request.steering_context,
-                )
+                yield await emit({
+                    "type": "done",
+                    "result": AgentTaskResponse(
+                        engine="hermes",
+                        command="respond",
+                        cwd=str(cwd),
+                        exit_code=1,
+                        stdout="I could not classify that cleanly, so I stopped before using any coding tools.",
+                        stderr=str(error),
+                    ).model_dump(),
+                })
+                yield "[DONE]"
+                return
 
         original_task = request.task
         max_revisions = max(1, min(int(request.max_revisions or 3), 8))
