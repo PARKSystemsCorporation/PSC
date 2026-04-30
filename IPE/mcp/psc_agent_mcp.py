@@ -92,6 +92,53 @@ def _exe(name: str) -> str:
     return str(candidate) if candidate.exists() else name
 
 
+def _aider_seed_files(task: str) -> list[str]:
+    cwd = _workspace()
+    text = task.lower()
+    seed_names = [
+        "package.json",
+        "index.html",
+        "vite.config.ts",
+        "vite.config.js",
+        "tsconfig.json",
+        "src/main.tsx",
+        "src/main.jsx",
+        "src/main.ts",
+        "src/main.js",
+        "src/App.tsx",
+        "src/App.jsx",
+        "src/App.ts",
+        "src/App.js",
+        "src/styles/globals.css",
+        "src/index.css",
+        "src/App.css",
+    ]
+    if any(term in text for term in ["pwa", "progressive web app", "service worker", "manifest", "offline", "installable"]):
+        seed_names.extend([
+            "manifest.json",
+            "public/manifest.json",
+            "src/manifest.json",
+            "sw.js",
+            "public/sw.js",
+            "src/sw.js",
+            "src/vite-env.d.ts",
+        ])
+
+    files: list[str] = []
+    seen: set[str] = set()
+    for name in seed_names:
+        path = cwd / name
+        if not path.is_file():
+            continue
+        rel = str(path.relative_to(cwd))
+        key = rel.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        files.append(rel)
+    return files
+
+
 def _run(args: list[str], timeout: int = 1800) -> dict[str, Any]:
     result = subprocess.run(
         _shell_command(args),
@@ -256,24 +303,26 @@ def _call_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         task = str(args.get("task") or "").strip()
         if not task:
             raise ValueError("task is required")
+        aider_args = [
+            _exe("aider"),
+            "--model",
+            f"ollama_chat/{model}",
+            "--yes-always",
+            "--no-pretty",
+            "--no-stream",
+            "--no-fancy-input",
+            "--no-notifications",
+            "--no-show-model-warnings",
+            "--no-check-update",
+            "--encoding",
+            "utf-8",
+        ]
+        for file in _aider_seed_files(task):
+            aider_args.extend(["--file", file])
+        aider_args.extend(["--message", task])
         return _tool_result(
             _run(
-                [
-                    _exe("aider"),
-                    "--model",
-                    f"ollama_chat/{model}",
-                    "--message",
-                    task,
-                    "--yes-always",
-                    "--no-pretty",
-                    "--no-stream",
-                    "--no-fancy-input",
-                    "--no-notifications",
-                    "--no-show-model-warnings",
-                    "--no-check-update",
-                    "--encoding",
-                    "utf-8",
-                ],
+                aider_args,
                 timeout=timeout,
             )
         )

@@ -658,12 +658,10 @@ def _build_agent_command(request: AgentTaskRequest) -> tuple[str, list[str]]:
         return "ra-aid", args
 
     if engine == "aider":
-        return "aider", [
+        args = [
             _agent_executable("aider"),
             "--model",
             f"ollama_chat/{model}",
-            "--message",
-            task,
             "--yes-always",
             "--no-pretty",
             "--no-stream",
@@ -674,6 +672,10 @@ def _build_agent_command(request: AgentTaskRequest) -> tuple[str, list[str]]:
             "--encoding",
             "utf-8",
         ]
+        for file in _aider_seed_files(_resolve_execution_cwd(request.cwd), task):
+            args.extend(["--file", file])
+        args.extend(["--message", task])
+        return "aider", args
 
     raise HTTPException(status_code=400, detail="engine must be 'hermes', 'ra-aid', or 'aider'")
 
@@ -754,6 +756,54 @@ def _looks_like_broad_agent_task(task: str) -> bool:
     )
     tiny_edit = any(phrase in text for phrase in ["one-line", "typo", "rename ", "change the text", "update the label"])
     return not (file_hint and tiny_edit)
+
+
+def _aider_seed_files(cwd: Path, task: str) -> list[str]:
+    """Add likely project files to one-shot aider runs so it can edit, not ask for paths."""
+    text = task.lower()
+    seed_names = [
+        "package.json",
+        "index.html",
+        "vite.config.ts",
+        "vite.config.js",
+        "tsconfig.json",
+        "src/main.tsx",
+        "src/main.jsx",
+        "src/main.ts",
+        "src/main.js",
+        "src/App.tsx",
+        "src/App.jsx",
+        "src/App.ts",
+        "src/App.js",
+        "src/styles/globals.css",
+        "src/index.css",
+        "src/App.css",
+    ]
+
+    if any(term in text for term in ["pwa", "progressive web app", "service worker", "manifest", "offline", "installable"]):
+        seed_names.extend([
+            "manifest.json",
+            "public/manifest.json",
+            "src/manifest.json",
+            "sw.js",
+            "public/sw.js",
+            "src/sw.js",
+            "src/vite-env.d.ts",
+        ])
+
+    files: list[str] = []
+    seen: set[str] = set()
+    for name in seed_names:
+        path = cwd / name
+        if not path.is_file():
+            continue
+        rel = str(path.relative_to(cwd))
+        key = rel.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        files.append(rel)
+    return files
 
 
 def _is_ra_aid_available() -> tuple[bool, str]:
@@ -1724,9 +1774,10 @@ async def run_agent_task_stream(request: AgentTaskRequest):
                     yield "[DONE]"
                     return
                 if delegated_engine == "ra-aid" and not _is_ra_aid_available()[0]:
+                    _, reason = _is_ra_aid_available()
                     yield await emit({
                         "type": "status",
-                        "message": "RA.Aid is unavailable in this venv, so Lila Agent is falling back to aider.",
+                        "message": f"RA.Aid is unavailable in this venv ({reason}), so Lila Agent is falling back to file-seeded aider.",
                     })
                     delegated_engine = "aider"
                 motor_request = AgentTaskRequest(

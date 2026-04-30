@@ -332,7 +332,7 @@ export class AiChatWidget extends ReactWidget {
         const call: GemmaProtocol.AgentToolCall = {
             name: engine === 'aider' ? 'aider_task' : (engine === 'ra-aid' ? 'ra_aid_task' : 'hermes_task'),
             args: {
-                task: userMsg.content,
+                task: this.buildExternalAgentTask(userMsg),
                 engine,
                 use_aider: engine === 'ra-aid',
                 timeout: 1800,
@@ -369,6 +369,30 @@ export class AiChatWidget extends ReactWidget {
         });
         this.update();
         this.scrollToBottom();
+    }
+
+    private buildExternalAgentTask(userMsg: ChatMessage): string {
+        const previous = this.messages
+            .filter(m => m.id !== userMsg.id && !m.toolResult)
+            .slice(-8)
+            .map(m => {
+                const label = m.role === 'user' ? 'User' : 'Assistant';
+                const tool = m.toolCall ? ` [${m.toolCall.name}: ${this.toolSummary(m.toolCall)}]` : '';
+                const content = (m.content || '').replace(/\s+/g, ' ').trim().slice(0, 900);
+                return content || tool ? `${label}${tool}: ${content}`.trim() : '';
+            })
+            .filter(Boolean);
+
+        if (!previous.length) {
+            return userMsg.content;
+        }
+
+        return [
+            `Current request: ${userMsg.content}`,
+            '',
+            'Recent conversation context for resolving follow-ups like "continue", "that", or "finish it":',
+            previous.map(line => `- ${line}`).join('\n'),
+        ].join('\n');
     }
 
     private async runAgentTask(call: GemmaProtocol.AgentToolCall, liveMsg?: ChatMessage): Promise<{ ok: boolean; result?: any; error?: string }> {
