@@ -122,10 +122,10 @@ export namespace GemmaProtocol {
         timed_out: boolean;
     }
 
-    /** RA.Aid/aider task request */
+    /** Hermes/RA.Aid/aider task request */
     export interface AgentTaskRequest {
         task: string;
-        engine?: 'ra-aid' | 'aider';
+        engine?: 'hermes' | 'ra-aid' | 'aider';
         cwd?: string;
         timeout?: number;
         use_aider?: boolean;
@@ -140,6 +140,17 @@ export namespace GemmaProtocol {
         stdout: string;
         stderr: string;
         timed_out: boolean;
+    }
+
+    /** Live event emitted while RA.Aid/aider is running. */
+    export interface AgentTaskEvent {
+        type: 'status' | 'log' | 'done' | 'error' | string;
+        message?: string;
+        command?: string;
+        stream?: 'stdout' | 'stderr' | string;
+        text?: string;
+        result?: AgentTaskResponse;
+        error?: string;
     }
 
     /** PSC target workspace status */

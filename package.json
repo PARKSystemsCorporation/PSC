@@ -13,6 +13,7 @@
     "canopy:install-online": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-canopy-wsl-online.ps1",
     "canopy": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/canopy-dashboard.ps1",
     "canopy:setup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/canopy-dashboard.ps1 -PrepareWorktrees",
+    "agents:dual": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dual-agent-dashboard.ps1",
     "mcp:agent": "IPE\\llm-server\\.venv\\Scripts\\python.exe IPE\\mcp\\psc_agent_mcp.py",
     "window": "node scripts/project-cli.js window"
   },

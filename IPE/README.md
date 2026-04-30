@@ -105,6 +105,14 @@ npm run canopy:check
 
 Use `npm run canopy:install-online` only during an approved online maintenance window, or install `tmux`, `git`, and `canopy` from an offline package cache.
 
+Before WSL/Canopy is ready, you can still launch two native Windows Hermes-managed agents:
+
+```bash
+npm run agents:dual
+```
+
+This opens Hermes-managed RA.Aid/aider motor sessions for `C:\vestra` and `C:\lila` in separate terminal tabs.
+
 ## Local Model Defaults
 
 Recommended fast local model:

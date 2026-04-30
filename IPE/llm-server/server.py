@@ -84,6 +84,7 @@ ollama_pull_state: dict[str, Any] = {
 # also pull arbitrary tags via a free-form input.
 OLLAMA_LIBRARY: list[dict[str, Any]] = [
     {"tag": "gemma3:27b",          "size_gb": 17.0,"label": "Gemma 3 27B",          "description": "Default coding mode. Largest public Gemma; needs ~24GB VRAM or 32GB RAM with CPU spill."},
+    {"tag": "hermes3:8b",          "size_gb": 4.7, "label": "Hermes 3 8B",          "description": "Nous Hermes 3 via Ollama. Steerable general agent model with strong multi-turn and tool-use behavior."},
     {"tag": "deepseek-r1:14b",     "size_gb": 9.0, "label": "DeepSeek R1 14B",      "description": "Default debugging mode. Reasoning-tuned, strong at root-causing failures and trace analysis."},
     {"tag": "qwen3-coder:30b",     "size_gb": 18.6,"label": "Qwen 3 Coder 30B (A3B)","description": "Latest Qwen MoE coder — 30B params, ~3B active. Needs ~24GB VRAM (or fast CPU + 32GB RAM)."},
     {"tag": "qwen2.5-coder:7b",    "size_gb": 4.7, "label": "Qwen 2.5 Coder 7B",    "description": "Strong open-source coder, fits on 8GB GPUs."},
@@ -181,7 +182,7 @@ class ExecuteResponse(BaseModel):
 
 class AgentTaskRequest(BaseModel):
     task: str = Field(..., description="Natural-language coding task")
-    engine: str = Field("ra-aid", description="Agent engine: ra-aid or aider")
+    engine: str = Field("hermes", description="Agent engine: hermes, ra-aid, or aider")
     cwd: Optional[str] = Field(None, description="Optional working directory inside the target workspace")
     timeout: int = Field(1800, description="Timeout in seconds")
     use_aider: bool = Field(True, description="For RA.Aid, delegate implementation edits to aider")
@@ -195,6 +196,16 @@ class AgentTaskResponse(BaseModel):
     stdout: str
     stderr: str
     timed_out: bool = False
+
+
+class AgentTaskEvent(BaseModel):
+    type: str
+    message: Optional[str] = None
+    command: Optional[str] = None
+    stream: Optional[str] = None
+    text: Optional[str] = None
+    result: Optional[AgentTaskResponse] = None
+    error: Optional[str] = None
 
 
 class RefactorRequest(BaseModel):
@@ -549,6 +560,10 @@ def _get_model_name() -> str:
     return _get_desired_model_key()
 
 
+def _get_hermes_model_name() -> str:
+    return (_read_env_file().get("HERMES_MODEL") or os.environ.get("HERMES_MODEL") or "hermes3:8b").strip()
+
+
 def _agent_subprocess_env() -> dict[str, str]:
     env_values = _read_env_file()
     model = _get_model_name()
@@ -618,7 +633,69 @@ def _build_agent_command(request: AgentTaskRequest) -> tuple[str, list[str]]:
             "--yes-always",
         ]
 
-    raise HTTPException(status_code=400, detail="engine must be 'ra-aid' or 'aider'")
+    raise HTTPException(status_code=400, detail="engine must be 'hermes', 'ra-aid', or 'aider'")
+
+
+def _read_manager_memory(cwd: Path) -> str:
+    memory_names = ["MEMORY.md", "memory.md", "AGENTS.md", "CLAUDE.md"]
+    chunks: list[str] = []
+    for name in memory_names:
+        path = cwd / name
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        chunks.append(f"# {name}\n{text[:8000]}")
+    return "\n\n".join(chunks)
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("manager response did not contain a JSON object")
+    return json.loads(text[start:end + 1])
+
+
+async def _ask_hermes_manager(task: str, cwd: Path) -> dict[str, Any]:
+    memory = _read_manager_memory(cwd)
+    memory_block = memory if memory else "(No MEMORY.md, AGENTS.md, CLAUDE.md, or memory.md found.)"
+    prompt = f"""You are Hermes, the always-on local coding-agent manager.
+
+Choose the right motor function for this request:
+- ra-aid: senior engineer for repo inspection, research, planning, multi-step work, and broad refactors.
+- aider: junior editor for surgical edits when the target files and change are already clear.
+
+Return only compact JSON with this schema:
+{{"tool":"ra-aid"|"aider","rationale":"short user-visible reason","delegated_task":"the exact task for the chosen tool"}}
+
+Project memory:
+{memory_block}
+
+User request:
+{task}
+"""
+    payload = {
+        "messages": [
+            {"role": "system", "content": "You are Hermes, a concise local coding-agent manager. Return only valid JSON."},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": 900,
+        "temperature": 0.1,
+        "top_p": 0.9,
+    }
+    content = await _complete_backend(payload, model_override=_get_hermes_model_name())
+    decision = _extract_json_object(content)
+    tool = str(decision.get("tool", "")).strip().lower()
+    if tool not in {"ra-aid", "aider"}:
+        decision["tool"] = "ra-aid"
+    if not str(decision.get("delegated_task", "")).strip():
+        decision["delegated_task"] = task
+    if not str(decision.get("rationale", "")).strip():
+        decision["rationale"] = "Defaulting to the safest implementation path."
+    return decision
 
 
 def _latest_user_message(messages: list[dict[str, Any]]) -> str:
@@ -779,11 +856,11 @@ async def _stream_backend(payload: dict) -> AsyncIterator[str]:
     yield "[DONE]"
 
 
-async def _complete_backend(payload: dict) -> str:
+async def _complete_backend(payload: dict, model_override: Optional[str] = None) -> str:
     """Non-streaming completion from backend."""
     url = f"{_get_backend_url()}/v1/chat/completions"
     payload["stream"] = False
-    payload["model"] = _get_model_name()
+    payload["model"] = model_override or _get_model_name()
 
     resp = await http_client.post(url, json=payload, timeout=120.0)
     if resp.status_code != 200:
@@ -1249,11 +1326,119 @@ async def execute_command(request: ExecuteRequest):
 # Agent file tools — read_file / write_file / list_dir
 # ---------------------------------------------------------------------------
 
+async def _agent_process_events(request: AgentTaskRequest, cwd: Path, timeout: int) -> AsyncIterator[dict[str, Any]]:
+    engine, args = _build_agent_command(request)
+    display_command = subprocess.list2cmdline(args) if os.name == "nt" else " ".join(shlex.quote(arg) for arg in args)
+    stdout_parts: list[str] = []
+    stderr_parts: list[str] = []
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+    yield {
+        "type": "status",
+        "message": f"Starting {engine} in {cwd}",
+        "command": display_command,
+    }
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *_agent_shell_command(args),
+            cwd=str(cwd),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_agent_subprocess_env(),
+        )
+    except Exception as error:
+        yield {"type": "error", "error": str(error)}
+        return
+
+    async def pump(stream: Optional[asyncio.StreamReader], name: str, sink: list[str]) -> None:
+        if stream is None:
+            return
+        while True:
+            chunk = await stream.readline()
+            if not chunk:
+                break
+            text = chunk.decode("utf-8", errors="replace")
+            sink.append(text)
+            await queue.put({"type": "log", "stream": name, "text": text})
+
+    async def wait_for_exit() -> None:
+        exit_code = await process.wait()
+        await queue.put({"type": "process_done", "exit_code": exit_code})
+
+    tasks = [
+        asyncio.create_task(pump(process.stdout, "stdout", stdout_parts)),
+        asyncio.create_task(pump(process.stderr, "stderr", stderr_parts)),
+        asyncio.create_task(wait_for_exit()),
+    ]
+    deadline = time.monotonic() + timeout
+    timed_out = False
+    exit_code = 124
+
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                process.kill()
+                await process.wait()
+                break
+
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=min(1.0, remaining))
+            except asyncio.TimeoutError:
+                yield {"type": "status", "message": f"{engine} is still working..."}
+                continue
+
+            if event["type"] == "process_done":
+                exit_code = int(event["exit_code"])
+                break
+            yield event
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    if timed_out:
+        stderr_parts.append(f"Agent task timed out after {timeout} seconds")
+
+    response = AgentTaskResponse(
+        engine=engine,
+        command=display_command,
+        cwd=str(cwd),
+        exit_code=exit_code,
+        stdout="".join(stdout_parts),
+        stderr="".join(stderr_parts),
+        timed_out=timed_out,
+    )
+    yield {"type": "done", "result": response.model_dump()}
+
+
 @app.post("/api/agent/task", response_model=AgentTaskResponse)
 async def run_agent_task(request: AgentTaskRequest):
     """Run a PSC MCP-style agent tool: RA.Aid for planning, aider for edits."""
     cwd = _resolve_execution_cwd(request.cwd)
     timeout = max(1, min(request.timeout, 3600))
+    if request.engine.strip().lower() == "hermes":
+        try:
+            decision = await _ask_hermes_manager(request.task, cwd)
+            delegated_engine = str(decision.get("tool", "ra-aid")).strip().lower()
+            request = AgentTaskRequest(
+                task=str(decision.get("delegated_task") or request.task),
+                engine=delegated_engine,
+                cwd=str(cwd),
+                timeout=timeout,
+                use_aider=delegated_engine == "ra-aid",
+            )
+        except Exception:
+            request = AgentTaskRequest(
+                task=request.task,
+                engine="ra-aid",
+                cwd=str(cwd),
+                timeout=timeout,
+                use_aider=True,
+            )
+
     engine, args = _build_agent_command(request)
     display_command = subprocess.list2cmdline(args) if os.name == "nt" else " ".join(shlex.quote(arg) for arg in args)
 
@@ -1285,6 +1470,58 @@ async def run_agent_task(request: AgentTaskRequest):
             stderr=error.stderr or f"Agent task timed out after {timeout} seconds",
             timed_out=True,
         )
+
+
+@app.post("/api/agent/task/stream")
+async def run_agent_task_stream(request: AgentTaskRequest):
+    """Run Hermes manager, RA.Aid, or aider and stream a live activity log."""
+    cwd = _resolve_execution_cwd(request.cwd)
+    timeout = max(1, min(request.timeout, 3600))
+
+    async def emit(event: dict[str, Any]) -> str:
+        return json.dumps(event, ensure_ascii=False)
+
+    async def event_stream() -> AsyncIterator[str]:
+        motor_request = request
+        if request.engine.strip().lower() == "hermes":
+            yield await emit({
+                "type": "status",
+                "message": f"Hermes manager is reading project memory and choosing a motor function ({_get_hermes_model_name()}).",
+            })
+            try:
+                decision = await _ask_hermes_manager(request.task, cwd)
+                delegated_engine = str(decision.get("tool", "ra-aid")).strip().lower()
+                delegated_task = str(decision.get("delegated_task") or request.task)
+                rationale = str(decision.get("rationale") or "Delegating to the safest available tool.")
+                yield await emit({
+                    "type": "status",
+                    "message": f"Hermes chose {delegated_engine}: {rationale}",
+                })
+                motor_request = AgentTaskRequest(
+                    task=delegated_task,
+                    engine=delegated_engine,
+                    cwd=str(cwd),
+                    timeout=timeout,
+                    use_aider=delegated_engine == "ra-aid",
+                )
+            except Exception as error:
+                yield await emit({
+                    "type": "status",
+                    "message": f"Hermes manager failed ({error}); falling back to RA.Aid.",
+                })
+                motor_request = AgentTaskRequest(
+                    task=request.task,
+                    engine="ra-aid",
+                    cwd=str(cwd),
+                    timeout=timeout,
+                    use_aider=True,
+                )
+
+        async for event in _agent_process_events(motor_request, cwd, timeout):
+            yield await emit(event)
+        yield "[DONE]"
+
+    return EventSourceResponse(event_stream())
 
 
 @app.post("/api/fs/read")

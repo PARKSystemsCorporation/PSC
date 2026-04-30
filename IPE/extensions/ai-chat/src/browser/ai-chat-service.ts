@@ -249,6 +249,69 @@ export class AiChatService {
         return await resp.json();
     }
 
+    /**
+     * Delegate a coding task and stream the agent's live stdout/stderr.
+     */
+    async streamAgentTask(
+        request: GemmaProtocol.AgentTaskRequest,
+        onEvent: (event: GemmaProtocol.AgentTaskEvent) => void,
+    ): Promise<GemmaProtocol.AgentTaskResponse> {
+        const resp = await fetch(`${this._serverUrl}/api/agent/task/stream`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(request),
+        });
+
+        if (!resp.ok) {
+            const detail = await resp.text();
+            throw new Error(`Agent task error: ${resp.status} ${detail}`);
+        }
+
+        const reader = resp.body?.getReader();
+        if (!reader) {
+            throw new Error('No response body');
+        }
+
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let finalResult: GemmaProtocol.AgentTaskResponse | undefined;
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                const data = line.slice(6).trim();
+                if (!data || data === '[DONE]') continue;
+                try {
+                    const event = JSON.parse(data) as GemmaProtocol.AgentTaskEvent;
+                    onEvent(event);
+                    if (event.type === 'done' && event.result) {
+                        finalResult = event.result;
+                    }
+                    if (event.type === 'error') {
+                        throw new Error(event.error || 'Agent task failed');
+                    }
+                } catch (error: any) {
+                    if (error instanceof SyntaxError) {
+                        continue;
+                    }
+                    throw error;
+                }
+            }
+        }
+
+        if (!finalResult) {
+            throw new Error('Agent task ended without a final result');
+        }
+        return finalResult;
+    }
+
     // ---- Agent file tools ----------------------------------------------
 
     async readFile(path: string, maxBytes?: number): Promise<GemmaProtocol.ReadFileResult> {

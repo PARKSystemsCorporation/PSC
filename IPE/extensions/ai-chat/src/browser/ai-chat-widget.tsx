@@ -39,7 +39,7 @@ type ChatTab = 'chat' | 'preview';
 
 type ChatMode = 'code' | 'debug';
 
-type AgentRoute = 'ra-aid' | 'aider' | 'gemma';
+type AgentRoute = 'hermes' | 'ra-aid' | 'aider';
 
 /**
  * Footer mode → Ollama tag mapping. Clicking a mode in the footer swaps the
@@ -69,7 +69,7 @@ const MAX_TOOL_ITERATIONS = 12;
 export class AiChatWidget extends ReactWidget {
 
     static readonly ID = AI_CHAT_WIDGET_ID;
-    static readonly LABEL = 'Gemma AI';
+    static readonly LABEL = 'Hermes Coder';
 
     @inject(AiChatService)
     protected readonly chatService!: AiChatService;
@@ -102,7 +102,7 @@ export class AiChatWidget extends ReactWidget {
 
     // Agent-mode state
     private agentMode: boolean = true;
-    private agentRoute: AgentRoute = 'ra-aid';
+    private agentRoute: AgentRoute = 'hermes';
     private pendingConfirm: PendingConfirm | null = null;
 
     // Model picker state
@@ -120,8 +120,8 @@ export class AiChatWidget extends ReactWidget {
     protected init(): void {
         this.id = AiChatWidget.ID;
         this.title.label = AiChatWidget.LABEL;
-        this.title.caption = 'Gemma AI Assistant';
-        this.title.iconClass = 'codicon codicon-hubot';
+        this.title.caption = 'Hermes local coding manager';
+        this.title.iconClass = 'codicon codicon-circuit-board';
         this.title.closable = true;
         this.addClass('gemma-ai-chat-widget');
 
@@ -182,15 +182,13 @@ export class AiChatWidget extends ReactWidget {
 
         try {
             if (this.agentMode) {
-                if (this.agentRoute === 'gemma' || text.toLowerCase().startsWith('/gemma ')) {
-                    userMsg.content = text.toLowerCase().startsWith('/gemma ')
-                        ? text.slice('/gemma '.length).trim()
-                        : text;
+                if (text.toLowerCase().startsWith('/local ')) {
+                    userMsg.content = text.slice('/local '.length).trim();
                     await this.runAgentLoop(userMsg);
                 } else {
                     const handled = await this.runDirectAgentAction(userMsg);
                     if (!handled) {
-                    await this.runExternalAgentTask(userMsg);
+                        await this.runExternalAgentTask(userMsg);
                     }
                 }
             } else {
@@ -324,9 +322,13 @@ export class AiChatWidget extends ReactWidget {
     }
 
     private async runExternalAgentTask(userMsg: ChatMessage): Promise<void> {
-        const engine = this.agentRoute === 'aider' || (/\baider\b/i.test(userMsg.content) && !/\bra[\.\- ]?aid\b/i.test(userMsg.content)) ? 'aider' : 'ra-aid';
+        const content = userMsg.content;
+        const engine =
+            this.agentRoute === 'aider' || (/\baider\b/i.test(content) && !/\bra[\.\- ]?aid\b/i.test(content)) ? 'aider' :
+            this.agentRoute === 'ra-aid' || /\bra[\.\- ]?aid\b/i.test(content) ? 'ra-aid' :
+            'hermes';
         const call: GemmaProtocol.AgentToolCall = {
-            name: engine === 'aider' ? 'aider_task' : 'ra_aid_task',
+            name: engine === 'aider' ? 'aider_task' : (engine === 'ra-aid' ? 'ra_aid_task' : 'hermes_task'),
             args: {
                 task: userMsg.content,
                 engine,
@@ -348,7 +350,7 @@ export class AiChatWidget extends ReactWidget {
 
         const approved = await this.confirmTool(call);
         const result = approved
-            ? await this.runAgentTask(call)
+            ? await this.runAgentTask(call, assistantMsg)
             : { ok: false, error: 'user denied' };
 
         this.messages.push({
@@ -370,18 +372,51 @@ export class AiChatWidget extends ReactWidget {
         this.scrollToBottom();
     }
 
-    private async runAgentTask(call: GemmaProtocol.AgentToolCall): Promise<{ ok: boolean; result?: any; error?: string }> {
+    private async runAgentTask(call: GemmaProtocol.AgentToolCall, liveMsg?: ChatMessage): Promise<{ ok: boolean; result?: any; error?: string }> {
         try {
-            const data = await this.chatService.runAgentTask({
+            if (liveMsg) {
+                liveMsg.content = 'Starting agent task...\n\n';
+                this.update();
+                this.scrollToBottom();
+            }
+            const data = await this.chatService.streamAgentTask({
                 task: call.args.task,
                 engine: call.args.engine,
                 timeout: call.args.timeout,
                 use_aider: call.args.use_aider,
+            }, event => {
+                if (!liveMsg) return;
+                this.appendAgentActivity(liveMsg, event);
             });
             return { ok: true, result: data };
         } catch (err: any) {
             return { ok: false, error: err?.message || String(err) };
         }
+    }
+
+    private appendAgentActivity(msg: ChatMessage, event: GemmaProtocol.AgentTaskEvent): void {
+        let line = '';
+        if (event.type === 'status' && event.message) {
+            line = `[status] ${event.message}`;
+            if (event.command) {
+                line += `\n[command] ${event.command}`;
+            }
+        } else if (event.type === 'log' && event.text) {
+            const prefix = event.stream === 'stderr' ? '[stderr]' : '[stdout]';
+            line = `${prefix} ${event.text.replace(/\s+$/g, '')}`;
+        } else if (event.type === 'done' && event.result) {
+            line = `[done] ${event.result.engine} exited with code ${event.result.exit_code}${event.result.timed_out ? ' (timed out)' : ''}`;
+        } else if (event.type === 'error') {
+            line = `[error] ${event.error || 'Agent task failed'}`;
+        }
+        if (!line) return;
+
+        const next = `${msg.content}${msg.content.endsWith('\n') ? '' : '\n'}${line}\n`;
+        msg.content = next.length > 12000
+            ? `... earlier agent activity trimmed ...\n${next.slice(-11000)}`
+            : next;
+        this.update();
+        this.scrollToBottom();
     }
 
     private summarizeAgentTaskResult(call: GemmaProtocol.AgentToolCall, result: { ok: boolean; result?: any; error?: string }): string {
@@ -391,7 +426,11 @@ export class AiChatWidget extends ReactWidget {
         const data = result.result as GemmaProtocol.AgentTaskResponse;
         const output = [data.stdout, data.stderr].filter(Boolean).join('\n').trim();
         const details = output ? `\n\n\`\`\`text\n${output.slice(0, 5000)}\n\`\`\`` : '';
-        return `${call.name === 'aider_task' ? 'aider' : 'RA.Aid + aider'} finished with exit code ${data.exit_code}.${details}`;
+        const label =
+            call.name === 'aider_task' ? 'aider' :
+            call.name === 'hermes_task' ? `Hermes -> ${data.engine}` :
+            'RA.Aid + aider';
+        return `${label} finished with exit code ${data.exit_code}.${details}`;
     }
 
     private summarizeDirectToolResult(call: GemmaProtocol.AgentToolCall, result: { ok: boolean; result?: any; error?: string }): string {
@@ -679,8 +718,8 @@ export class AiChatWidget extends ReactWidget {
     private buildIdeAwarePrompt(userRequest: string): string {
         const editorContext = this.getEditorContext();
         const contextLines = [
-            '[Gemma IDE request]',
-            'You are running inside Gemma Theia IDE, a VS Code-style coding workspace with an AI chat sidebar, editor integration, inline completion, refactoring, and a terminal agent panel.',
+            '[Hermes Coder request]',
+            'You are running inside PSC Hermes Coder, a VS Code-style local autonomous coding workspace with an AI chat sidebar, editor integration, inline completion, refactoring, and a terminal agent panel.',
             this.agentMode
                 ? 'Agent mode is ON: you have workspace tools for reading files, listing directories, writing files after approval, and running commands after approval. For coding work, use those tools instead of claiming you can only generate text.'
                 : 'Agent mode is OFF: answer conversationally without workspace tool calls.',
@@ -872,7 +911,7 @@ export class AiChatWidget extends ReactWidget {
     private buildMarkdownTranscript(assistantOnly: boolean): string {
         const stamp = new Date().toISOString();
         const header = [
-            `# Gemma AI Conversation`,
+            `# Hermes Coder Conversation`,
             ``,
             `_Saved ${stamp}_`,
             ``,
@@ -886,7 +925,7 @@ export class AiChatWidget extends ReactWidget {
 
         const body = this.messages
             .map(m => {
-                const heading = m.role === 'user' ? '## You' : '## Gemma';
+                const heading = m.role === 'user' ? '## You' : '## Hermes';
                 return `${heading}\n\n${m.content.trim()}\n`;
             })
             .join('\n');
@@ -898,7 +937,7 @@ export class AiChatWidget extends ReactWidget {
         const roots = this.workspaceService.tryGetRoots();
         const root = roots[0]?.resource;
         if (!root) {
-            this.messageService.warn('Open a workspace folder before saving Gemma notes.');
+            this.messageService.warn('Open a workspace folder before saving Hermes notes.');
             return;
         }
 
@@ -1125,6 +1164,7 @@ export class AiChatWidget extends ReactWidget {
             case 'write_file': return 'codicon-edit';
             case 'list_dir': return 'codicon-folder-opened';
             case 'run_command': return 'codicon-terminal';
+            case 'hermes_task': return 'codicon-circuit-board';
             case 'ra_aid_task': return 'codicon-rocket';
             case 'aider_task': return 'codicon-tools';
             default: return 'codicon-symbol-method';
@@ -1137,6 +1177,7 @@ export class AiChatWidget extends ReactWidget {
             case 'list_dir': return call.args?.path || '.';
             case 'write_file': return `${call.args?.path || '(no path)'} (${(call.args?.content?.length ?? 0).toLocaleString()} chars)`;
             case 'run_command': return call.args?.command || '(no command)';
+            case 'hermes_task': return call.args?.task || '(no task)';
             case 'ra_aid_task': return call.args?.task || '(no task)';
             case 'aider_task': return call.args?.task || '(no task)';
             default: return JSON.stringify(call.args);
@@ -1194,7 +1235,7 @@ export class AiChatWidget extends ReactWidget {
                         Exit {r.exit_code}{r.timed_out ? ' (timed out)' : ''}
                     </div>
                 );
-            } else if ((result.name === 'ra_aid_task' || result.name === 'aider_task') && r) {
+            } else if ((result.name === 'hermes_task' || result.name === 'ra_aid_task' || result.name === 'aider_task') && r) {
                 body = (
                     <div className="gemma-tool-meta">
                         {r.engine} exit {r.exit_code}{r.timed_out ? ' (timed out)' : ''}
@@ -1325,7 +1366,7 @@ export class AiChatWidget extends ReactWidget {
                 <div className="gemma-model-card" onClick={e => e.stopPropagation()}>
                     <div className="gemma-model-header">
                         <span className="codicon codicon-symbol-namespace" />
-                        <span className="gemma-model-title">Choose Model</span>
+                        <span className="gemma-model-title">Choose Ollama Model</span>
                         <button
                             className="gemma-model-refresh"
                             title="Refresh from Ollama"
@@ -1479,20 +1520,20 @@ export class AiChatWidget extends ReactWidget {
 
     private renderAgentControlPanel(): React.ReactNode {
         const routes: Array<{ id: AgentRoute; label: string; icon: string; title: string }> = [
-            { id: 'ra-aid', label: 'RA.Aid', icon: 'codicon-rocket', title: 'Planner/tool brain with aider enabled for edits' },
-            { id: 'aider', label: 'aider', icon: 'codicon-tools', title: 'Direct code-editing hand' },
-            { id: 'gemma', label: 'Gemma', icon: 'codicon-hubot', title: 'Legacy local model tool loop' },
+            { id: 'hermes', label: 'Hermes', icon: 'codicon-circuit-board', title: 'Always-on manager that delegates to RA.Aid or aider' },
+            { id: 'ra-aid', label: 'RA.Aid', icon: 'codicon-rocket', title: 'Force the senior engineer motor function for this task' },
+            { id: 'aider', label: 'aider', icon: 'codicon-tools', title: 'Force the focused editor motor function for this task' },
         ];
         const routeCopy: Record<AgentRoute, string> = {
-            'ra-aid': 'Planner + editing hand',
-            aider: 'Direct edit mode',
-            gemma: 'Local tool loop',
+            hermes: 'Manager -> motor functions',
+            'ra-aid': 'Forced senior engineer',
+            aider: 'Forced editor',
         };
 
         return (
             <div className="gemma-agent-panel">
                 <div className="gemma-agent-panel-row">
-                    <div className="gemma-agent-route" role="group" aria-label="Agent engine">
+                    <div className="gemma-agent-route" role="group" aria-label="Command hierarchy">
                         {routes.map(route => (
                             <button
                                 key={route.id}
@@ -1523,21 +1564,30 @@ export class AiChatWidget extends ReactWidget {
                     </button>
                     <button
                         className="gemma-agent-action"
-                        title="Launch Canopy dashboards for Vestra and Lila"
+                        title="Launch Canopy dashboards for the managed project set"
                         disabled={this.isGenerating}
                         onClick={() => this.runShortcutCommand('Launch Canopy dashboards', 'npm.cmd run canopy', 120)}
                     >
                         <span className="codicon codicon-dashboard" />
-                        <span>Canopy</span>
+                        <span>Canopy Board</span>
                     </button>
                     <button
                         className="gemma-agent-action"
-                        title="Create Canopy worktrees, then launch dashboards"
+                        title="Launch two Hermes-managed local agents for separate project folders"
+                        disabled={this.isGenerating}
+                        onClick={() => this.runShortcutCommand('Launch dual native agents', 'npm.cmd run agents:dual', 120)}
+                    >
+                        <span className="codicon codicon-run-all" />
+                        <span>Dual Hermes</span>
+                    </button>
+                    <button
+                        className="gemma-agent-action"
+                        title="Prepare isolated git worktrees and open Canopy dashboards"
                         disabled={this.isGenerating}
                         onClick={() => this.runShortcutCommand('Prepare Canopy worktrees', 'npm.cmd run canopy:setup', 300)}
                     >
                         <span className="codicon codicon-git-branch" />
-                        <span>Worktrees</span>
+                        <span>Smart Worktrees</span>
                     </button>
                     <button
                         className="gemma-agent-action"
@@ -1562,12 +1612,12 @@ export class AiChatWidget extends ReactWidget {
                 {/* Header */}
                 <div className="gemma-chat-header">
                     <div className="gemma-chat-title">
-                        <span className="codicon codicon-hubot" />
-                        <span>Gemma AI</span>
+                        <span className="codicon codicon-circuit-board" />
+                        <span>Hermes Coder</span>
                     </div>
                     <button
                         className={`gemma-agent-toggle ${this.agentMode ? 'on' : 'off'}`}
-                        title={this.agentMode ? 'Agent mode ON — Gemma can read/write files and run commands (with approval)' : 'Agent mode OFF — chat-only'}
+                        title={this.agentMode ? 'Agent mode ON - Hermes can delegate to RA.Aid/aider and run approved workspace tools' : 'Agent mode OFF - chat-only'}
                         onClick={() => { this.agentMode = !this.agentMode; this.update(); }}
                         disabled={this.isGenerating}
                     >
@@ -1597,17 +1647,17 @@ export class AiChatWidget extends ReactWidget {
                         <div className="gemma-chat-messages">
                             {this.messages.length === 0 && (
                                 <div className="gemma-chat-welcome">
-                                    <h3>Local Agent Console</h3>
-                                    <p>Pick an engine above, then send a task. RA.Aid handles planning, aider edits, and Canopy supervises parallel worktrees.</p>
+                                    <h3>Hermes Command Console</h3>
+                                    <p>Hermes manages coding work. It delegates to RA.Aid or aider when useful, and Canopy handles multi-worktree supervision.</p>
                                     <div className="gemma-welcome-grid">
-                                        <button onClick={() => { this.agentRoute = 'ra-aid'; this.inputValue = 'Inspect the repo and propose the next safest implementation step.'; this.update(); }}>
-                                            <span className="codicon codicon-rocket" /> Plan with RA.Aid
+                                        <button onClick={() => { this.agentRoute = 'hermes'; this.inputValue = 'Build this end to end:'; this.update(); }}>
+                                            <span className="codicon codicon-circuit-board" /> Ask Hermes
                                         </button>
-                                        <button onClick={() => { this.agentRoute = 'aider'; this.inputValue = 'Make the smallest safe code change for:'; this.update(); }}>
-                                            <span className="codicon codicon-tools" /> Edit with aider
+                                        <button onClick={() => this.runShortcutCommand('Launch dual Hermes agents', 'npm.cmd run agents:dual', 120)}>
+                                            <span className="codicon codicon-run-all" /> Dual Hermes
                                         </button>
-                                        <button onClick={() => this.runShortcutCommand('Check Canopy prerequisites', 'npm.cmd run canopy:check', 120)}>
-                                            <span className="codicon codicon-dashboard" /> Check Canopy
+                                        <button onClick={() => this.runShortcutCommand('Prepare smart worktrees', 'npm.cmd run canopy:setup', 300)}>
+                                            <span className="codicon codicon-git-branch" /> Smart Worktrees
                                         </button>
                                         <button onClick={() => this.runShortcutCommand('Pull active workspace', 'git pull --ff-only', 300)}>
                                             <span className="codicon codicon-cloud-download" /> Git Pull
@@ -1623,7 +1673,7 @@ export class AiChatWidget extends ReactWidget {
                             <textarea
                                 className="gemma-chat-input"
                                 value={this.inputValue}
-                                placeholder="Ask Gemma..."
+                                placeholder="Ask Hermes to build..."
                                 rows={2}
                                 onChange={e => { this.inputValue = (e.target as HTMLTextAreaElement).value; this.update(); }}
                                 onKeyDown={e => {
