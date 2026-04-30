@@ -164,10 +164,15 @@ export class AiChatWidget extends ReactWidget {
     }
 
     private stopRequested: boolean = false;
+    private activeAgentRunId: string | undefined;
 
     private async handleSend(): Promise<void> {
         const text = this.inputValue.trim();
-        if (!text || this.isGenerating) return;
+        if (!text) return;
+        if (this.isGenerating) {
+            await this.sendAgentSteer(text);
+            return;
+        }
 
         const userMsg: ChatMessage = {
             id: this.generateId(),
@@ -200,6 +205,28 @@ export class AiChatWidget extends ReactWidget {
             this.isGenerating = false;
             this.abortController = null;
             this.update();
+        }
+    }
+
+    private async sendAgentSteer(text: string): Promise<void> {
+        this.inputValue = '';
+        this.messages.push({
+            id: this.generateId(),
+            role: 'user',
+            content: `[steer next revision] ${text}`,
+            timestamp: Date.now(),
+        });
+        this.update();
+        this.scrollToBottom();
+
+        if (!this.activeAgentRunId) {
+            this.messageService.warn('No active agent run is ready for steering yet.');
+            return;
+        }
+        try {
+            await this.chatService.steerAgentTask(this.activeAgentRunId, text);
+        } catch (err: any) {
+            this.messageService.error(`Failed to steer agent: ${err.message || err}`);
         }
     }
 
@@ -336,6 +363,8 @@ export class AiChatWidget extends ReactWidget {
                 engine,
                 use_aider: engine === 'ra-aid',
                 timeout: 1800,
+                max_revisions: 3,
+                run_id: this.generateId(),
             },
         };
 
@@ -403,11 +432,15 @@ export class AiChatWidget extends ReactWidget {
                 this.scrollToBottom();
             }
             this.abortController = new AbortController();
+            this.activeAgentRunId = call.args.run_id;
             const data = await this.chatService.streamAgentTask({
                 task: call.args.task,
                 engine: call.args.engine,
                 timeout: call.args.timeout,
                 use_aider: call.args.use_aider,
+                max_revisions: call.args.max_revisions,
+                steering_context: call.args.steering_context,
+                run_id: call.args.run_id,
             }, event => {
                 if (!liveMsg) return;
                 this.appendAgentActivity(liveMsg, event);
@@ -424,6 +457,10 @@ export class AiChatWidget extends ReactWidget {
                 return { ok: false, error: 'stopped by user' };
             }
             return { ok: false, error: err?.message || String(err) };
+        } finally {
+            if (this.activeAgentRunId === call.args.run_id) {
+                this.activeAgentRunId = undefined;
+            }
         }
     }
 
@@ -1733,13 +1770,21 @@ export class AiChatWidget extends ReactWidget {
                                         this.handleSend();
                                     }
                                 }}
-                                disabled={this.isGenerating}
                             />
                             <div className="gemma-chat-actions">
                                 {this.isGenerating ? (
-                                    <button className="gemma-btn gemma-btn-stop" onClick={() => this.handleStop()}>
-                                        <span className="codicon codicon-debug-stop" /> Stop
-                                    </button>
+                                    <>
+                                        <button
+                                            className="gemma-btn gemma-btn-send"
+                                            onClick={() => this.handleSend()}
+                                            disabled={!this.inputValue.trim()}
+                                        >
+                                            <span className="codicon codicon-comment-discussion" /> Steer
+                                        </button>
+                                        <button className="gemma-btn gemma-btn-stop" onClick={() => this.handleStop()}>
+                                            <span className="codicon codicon-debug-stop" /> Stop
+                                        </button>
+                                    </>
                                 ) : (
                                     <button
                                         className="gemma-btn gemma-btn-send"

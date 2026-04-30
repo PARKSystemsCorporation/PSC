@@ -9,6 +9,8 @@ IPE/.local-ide.pid
 IPE/.local-ide.log
 IPE/.llm-server.pid
 IPE/.llm-server.log
+IPE/.agent-revisions.json
+IPE/.agent-steering.json
 IPE/.telegram.pid
 IPE/.telegram.log
 IPE/.window-profile/

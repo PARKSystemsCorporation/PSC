@@ -61,6 +61,8 @@ BACKEND = CONFIG.get("backend", "llamacpp")
 PROJECT_DIR = Path(os.environ.get("PROJECT_DIR", str(DEFAULT_PROJECT_DIR)))
 ENV_FILE = Path(os.environ.get("ENV_FILE", PROJECT_DIR / "IPE" / ".env"))
 COMPOSE_FILE = Path(os.environ.get("COMPOSE_FILE", PROJECT_DIR / "docker-compose.yml"))
+AGENT_REVISION_FILE = Path(os.environ.get("AGENT_REVISION_FILE", PROJECT_DIR / "IPE" / ".agent-revisions.json"))
+AGENT_STEERING_FILE = Path(os.environ.get("AGENT_STEERING_FILE", PROJECT_DIR / "IPE" / ".agent-steering.json"))
 
 # HTTP client for backend communication
 http_client: Optional[httpx.AsyncClient] = None
@@ -191,6 +193,14 @@ class AgentTaskRequest(BaseModel):
     cwd: Optional[str] = Field(None, description="Optional working directory inside the target workspace")
     timeout: int = Field(1800, description="Timeout in seconds")
     use_aider: bool = Field(True, description="For RA.Aid, delegate implementation edits to aider")
+    max_revisions: int = Field(3, description="Maximum supervised revision attempts before stopping")
+    steering_context: str = Field("", description="Optional user steering to apply on the next revision")
+    run_id: str = Field("", description="Client-generated id for live steering")
+
+
+class AgentSteerRequest(BaseModel):
+    run_id: str = Field(..., description="Active agent run id")
+    message: str = Field(..., description="Steering message to apply on the next revision")
 
 
 class AgentTaskResponse(BaseModel):
@@ -211,6 +221,7 @@ class AgentTaskEvent(BaseModel):
     text: Optional[str] = None
     result: Optional[AgentTaskResponse] = None
     error: Optional[str] = None
+    revision: Optional[int] = None
 
 
 class RefactorRequest(BaseModel):
@@ -328,6 +339,54 @@ def _write_env_updates(updates: dict[str, str]) -> None:
         lines.append(f"{key}={value}")
 
     ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _next_agent_revision(cwd: Path) -> int:
+    try:
+        state = json.loads(AGENT_REVISION_FILE.read_text(encoding="utf-8")) if AGENT_REVISION_FILE.exists() else {}
+    except Exception:
+        state = {}
+
+    key = str(cwd.resolve())
+    revision = int(state.get(key, 0)) + 1
+    state[key] = revision
+    try:
+        AGENT_REVISION_FILE.parent.mkdir(parents=True, exist_ok=True)
+        AGENT_REVISION_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+    return revision
+
+
+def _read_agent_steering() -> dict[str, list[str]]:
+    try:
+        data = json.loads(AGENT_STEERING_FILE.read_text(encoding="utf-8")) if AGENT_STEERING_FILE.exists() else {}
+    except Exception:
+        return {}
+    return {str(key): [str(item) for item in value] for key, value in data.items() if isinstance(value, list)}
+
+
+def _write_agent_steering(data: dict[str, list[str]]) -> None:
+    try:
+        AGENT_STEERING_FILE.parent.mkdir(parents=True, exist_ok=True)
+        AGENT_STEERING_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _append_agent_steering(run_id: str, message: str) -> None:
+    data = _read_agent_steering()
+    data.setdefault(run_id, []).append(message)
+    _write_agent_steering(data)
+
+
+def _consume_agent_steering(run_id: str) -> str:
+    if not run_id:
+        return ""
+    data = _read_agent_steering()
+    messages = data.pop(run_id, [])
+    _write_agent_steering(data)
+    return "\n".join(message for message in messages if message.strip()).strip()
 
 
 def _get_desired_backend() -> str:
@@ -914,6 +973,64 @@ User request:
     if not str(decision.get("rationale", "")).strip():
         decision["rationale"] = "Defaulting to the safest implementation path."
     return decision
+
+
+async def _judge_agent_completion(task: str, response: AgentTaskResponse, cwd: Path) -> dict[str, Any]:
+    output = "\n".join(part for part in [response.stdout, response.stderr] if part).strip()
+    git_status = ""
+    try:
+        status = await asyncio.to_thread(
+            subprocess.run,
+            ["git", "status", "--short"],
+            cwd=str(cwd),
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+        git_status = status.stdout.strip()
+    except Exception:
+        git_status = ""
+    prompt = f"""You are PSC's local supervisor for autonomous coding tasks.
+
+Decide whether the agent actually completed the user's task, or whether PSC should continue with another revision.
+Return only compact JSON:
+{{"complete":true|false,"reason":"short reason","next_task":"specific follow-up task if incomplete"}}
+
+Mark complete=false when the output only asks for files, says it will continue, gives suggestions without editing, asks the user what to do next, or exits successfully without meaningful task completion.
+Mark complete=true when the task is clearly finished, no changes were necessary and that is justified, or a blocking condition requires user action.
+
+Workspace: {cwd}
+User task:
+{task}
+
+Current git status:
+{git_status or '(no git changes visible)'}
+
+Agent exit: {response.exit_code}{' timed out' if response.timed_out else ''}
+Agent output:
+{output[-6000:] if output else '(no output)'}
+"""
+    payload = {
+        "messages": [
+            {"role": "system", "content": "You are a strict local completion judge. Return only valid JSON."},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": 500,
+        "temperature": 0.0,
+        "top_p": 0.9,
+    }
+    try:
+        content = await _complete_backend(payload, model_override=_get_hermes_model_name())
+        decision = _extract_json_object(content)
+    except Exception as error:
+        return {"complete": True, "reason": f"Completion check failed: {error}", "next_task": ""}
+
+    complete = bool(decision.get("complete", True))
+    reason = str(decision.get("reason") or ("Task complete." if complete else "More work is needed.")).strip()
+    next_task = str(decision.get("next_task") or "").strip()
+    if not complete and not next_task:
+        next_task = f"Continue the original task until it is fully complete: {task}"
+    return {"complete": complete, "reason": reason, "next_task": next_task}
 
 
 def _latest_user_message(messages: list[dict[str, Any]]) -> str:
@@ -1786,6 +1903,8 @@ async def run_agent_task_stream(request: AgentTaskRequest):
                     cwd=str(cwd),
                     timeout=timeout,
                     use_aider=delegated_engine == "ra-aid",
+                    max_revisions=request.max_revisions,
+                    steering_context=request.steering_context,
                 )
             except Exception as error:
                 yield await emit({
@@ -1798,13 +1917,103 @@ async def run_agent_task_stream(request: AgentTaskRequest):
                     cwd=str(cwd),
                     timeout=timeout,
                     use_aider=True,
+                    max_revisions=request.max_revisions,
+                    steering_context=request.steering_context,
                 )
 
-        async for event in _agent_process_events(motor_request, cwd, timeout):
-            yield await emit(event)
+        original_task = request.task
+        max_revisions = max(1, min(int(request.max_revisions or 3), 8))
+        run_id = request.run_id.strip()
+        steering_context = request.steering_context.strip()
+
+        for attempt in range(1, max_revisions + 1):
+            revision = _next_agent_revision(cwd)
+            yield await emit({
+                "type": "status",
+                "message": f"Starting supervised revision {revision} (attempt {attempt}/{max_revisions}).",
+                "revision": revision,
+            })
+
+            final_response: AgentTaskResponse | None = None
+            async for event in _agent_process_events(motor_request, cwd, timeout):
+                if event.get("type") == "done" and event.get("result"):
+                    final_response = AgentTaskResponse(**event["result"])
+                    event["revision"] = revision
+                yield await emit(event)
+
+            if final_response is None:
+                break
+            if final_response.exit_code != 0 or final_response.timed_out:
+                break
+
+            yield await emit({
+                "type": "status",
+                "message": f"Checking whether revision {revision} completed the task.",
+                "revision": revision,
+            })
+            verdict = await _judge_agent_completion(original_task, final_response, cwd)
+            if verdict.get("complete", True):
+                yield await emit({
+                    "type": "status",
+                    "message": f"Supervisor marked revision {revision} complete: {verdict.get('reason', 'done')}",
+                    "revision": revision,
+                })
+                break
+
+            if attempt >= max_revisions:
+                yield await emit({
+                    "type": "status",
+                    "message": f"Supervisor stopped after {max_revisions} attempts: {verdict.get('reason', 'more work remains')}",
+                    "revision": revision,
+                })
+                break
+
+            live_steering = _consume_agent_steering(run_id)
+            if live_steering:
+                steering_context = "\n".join(part for part in [steering_context, live_steering] if part).strip()
+                yield await emit({
+                    "type": "status",
+                    "message": "Supervisor received user steering for the next revision.",
+                    "revision": revision,
+                })
+
+            next_task = str(verdict.get("next_task") or f"Continue until complete: {original_task}").strip()
+            next_task = f"{next_task}\n\nOriginal user task:\n{original_task}"
+            if steering_context:
+                next_task += f"\n\nUser steering to apply on this revision:\n{steering_context}"
+            next_task += (
+                "\n\nPrevious agent output to build on:\n"
+                f"{(final_response.stdout + chr(10) + final_response.stderr).strip()[-6000:]}"
+            )
+            yield await emit({
+                "type": "status",
+                "message": f"Supervisor continuing: {verdict.get('reason', 'more work is needed')}",
+                "revision": revision,
+            })
+            motor_request = AgentTaskRequest(
+                task=next_task,
+                engine=motor_request.engine,
+                cwd=str(cwd),
+                timeout=timeout,
+                use_aider=motor_request.use_aider,
+                max_revisions=max_revisions,
+                steering_context=steering_context,
+            )
         yield "[DONE]"
 
     return EventSourceResponse(event_stream())
+
+
+@app.post("/api/agent/steer")
+async def steer_agent_task(request: AgentSteerRequest):
+    message = request.message.strip()
+    run_id = request.run_id.strip()
+    if not run_id:
+        raise HTTPException(status_code=400, detail="run_id is required")
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+    _append_agent_steering(run_id, message)
+    return {"accepted": True, "run_id": run_id}
 
 
 @app.post("/api/fs/read")

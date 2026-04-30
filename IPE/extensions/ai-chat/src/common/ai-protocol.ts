@@ -129,6 +129,9 @@ export namespace GemmaProtocol {
         cwd?: string;
         timeout?: number;
         use_aider?: boolean;
+        max_revisions?: number;
+        steering_context?: string;
+        run_id?: string;
     }
 
     /** RA.Aid/aider task response */
@@ -151,6 +154,7 @@ export namespace GemmaProtocol {
         text?: string;
         result?: AgentTaskResponse;
         error?: string;
+        revision?: number;
     }
 
     /** PSC target workspace status */

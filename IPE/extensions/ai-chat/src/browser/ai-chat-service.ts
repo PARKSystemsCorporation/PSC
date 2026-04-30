@@ -314,6 +314,19 @@ export class AiChatService {
         return finalResult;
     }
 
+    async steerAgentTask(runId: string, message: string): Promise<{ accepted: boolean; run_id: string }> {
+        const resp = await fetch(`${this._serverUrl}/api/agent/steer`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ run_id: runId, message }),
+        });
+        if (!resp.ok) {
+            const detail = await resp.text();
+            throw new Error(`Agent steer error: ${resp.status} ${detail}`);
+        }
+        return await resp.json();
+    }
+
     // ---- Agent file tools ----------------------------------------------
 
     async readFile(path: string, maxBytes?: number): Promise<GemmaProtocol.ReadFileResult> {
