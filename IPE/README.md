@@ -115,17 +115,18 @@ This opens Lila Agent-managed RA.Aid/aider motor sessions for `C:\vestra` and `C
 
 ## Local Model Defaults
 
-Recommended fast local model:
+Recommended local model:
 
 ```bash
-ollama pull qwen2.5-coder:7b
+ollama pull deepseek-coder-v2:16b
 ```
 
 Important `.env` settings:
 
 ```bash
-LLM_MODEL=qwen2.5-coder:7b
-CTX_SIZE=8192
+LLM_MODEL=deepseek-coder-v2:16b
+HERMES_MODEL=
+CTX_SIZE=4096
 MEMPALACE_ENABLED=false
 PERSONAPLEX_ENABLED=false
 PSC_TARGET_WORKSPACE=..

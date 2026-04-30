@@ -46,13 +46,13 @@ function New-AgentCommand {
         if (-not (Test-Path $aider)) {
             throw "aider.exe was not found at $aider"
         }
-        return "Set-Location -LiteralPath '$Workspace'; `$env:PSC_TARGET_WORKSPACE='$Workspace'; `$env:HERMES_MODEL='hermes3:8b'; `$env:LLM_MODEL='$ModelName'; `$env:OLLAMA_BASE_URL='http://127.0.0.1:11434'; Write-Host '[$Label] Lila Agent-managed aider motor on $Workspace'; & '$aider' --model 'ollama_chat/$ModelName'"
+        return "Set-Location -LiteralPath '$Workspace'; `$env:PSC_TARGET_WORKSPACE='$Workspace'; `$env:LLM_MODEL='$ModelName'; `$env:OLLAMA_BASE_URL='http://127.0.0.1:11434'; `$env:OLLAMA_API_BASE='http://127.0.0.1:11434'; Write-Host '[$Label] Lila Agent-managed aider motor on $Workspace'; & '$aider' --model 'ollama_chat/$ModelName' --no-pretty --no-stream --no-fancy-input --no-notifications --no-show-model-warnings --no-check-update --encoding utf-8"
     }
 
     if (-not (Test-Path $raAid)) {
         throw "ra-aid.exe was not found at $raAid"
     }
-    return "Set-Location -LiteralPath '$Workspace'; `$env:PSC_TARGET_WORKSPACE='$Workspace'; `$env:HERMES_MODEL='hermes3:8b'; `$env:LLM_MODEL='$ModelName'; `$env:OLLAMA_BASE_URL='http://127.0.0.1:11434'; Write-Host '[$Label] Lila Agent-managed RA.Aid + aider motor on $Workspace'; & '$raAid' --provider ollama --model '$ModelName' --num-ctx '8192' --expert-provider ollama --expert-model '$ModelName' --expert-num-ctx '8192' --use-aider --log-mode console"
+    return "Set-Location -LiteralPath '$Workspace'; `$env:PSC_TARGET_WORKSPACE='$Workspace'; `$env:LLM_MODEL='$ModelName'; `$env:OLLAMA_BASE_URL='http://127.0.0.1:11434'; `$env:OLLAMA_API_BASE='http://127.0.0.1:11434'; Write-Host '[$Label] Lila Agent-managed RA.Aid + aider motor on $Workspace'; & '$raAid' --provider ollama --model '$ModelName' --num-ctx '4096' --expert-provider ollama --expert-model '$ModelName' --expert-num-ctx '4096' --use-aider --log-mode console"
 }
 
 Assert-Path $VestraPath
@@ -61,7 +61,7 @@ Assert-Path $LilaPath
 $envFile = Resolve-Path "$PSScriptRoot\..\IPE\.env"
 $modelName = if ($Model.Trim()) { $Model.Trim() } else { Read-EnvValue -Path $envFile -Key "LLM_MODEL" }
 if (-not $modelName) {
-    $modelName = "qwen2.5-coder:7b"
+    $modelName = "deepseek-coder-v2:16b"
 }
 
 $vestraCommand = New-AgentCommand -Workspace $VestraPath -Label "Vestra" -ModelName $modelName -AiderOnly:$UseAiderOnly

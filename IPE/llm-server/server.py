@@ -32,8 +32,12 @@ from model_manager import GEMMA4_MODELS, get_model_path, list_available_models, 
 # Configuration
 # ---------------------------------------------------------------------------
 
+SERVER_DIR = Path(__file__).resolve().parent
+DEFAULT_PROJECT_DIR = SERVER_DIR.parent.parent
+
+
 def load_config() -> dict:
-    config_path = os.environ.get("CONFIG_PATH", "/app/config.yaml")
+    config_path = os.environ.get("CONFIG_PATH", str(SERVER_DIR / "config.yaml"))
     if os.path.exists(config_path):
         with open(config_path) as f:
             return yaml.safe_load(f)
@@ -41,7 +45,7 @@ def load_config() -> dict:
     return {
         "server": {"host": "0.0.0.0", "port": 8000, "cors_origins": ["*"]},
         "backend": "llamacpp",
-        "llamacpp": {"server_url": "http://llama-server:8080"},
+        "llamacpp": {"server_url": "http://127.0.0.1:11434"},
         "vllm": {"server_url": "http://vllm-server:8000", "model_name": "google/gemma-4-12b-it"},
         "agent": {
             "chat_system_prompt": "You are Lila Agent, the expert AI coding manager inside PARK Systems Coder.",
@@ -54,8 +58,8 @@ def load_config() -> dict:
 
 CONFIG = load_config()
 BACKEND = CONFIG.get("backend", "llamacpp")
-PROJECT_DIR = Path(os.environ.get("PROJECT_DIR", "/workspace/project"))
-ENV_FILE = Path(os.environ.get("ENV_FILE", PROJECT_DIR / ".env"))
+PROJECT_DIR = Path(os.environ.get("PROJECT_DIR", str(DEFAULT_PROJECT_DIR)))
+ENV_FILE = Path(os.environ.get("ENV_FILE", PROJECT_DIR / "IPE" / ".env"))
 COMPOSE_FILE = Path(os.environ.get("COMPOSE_FILE", PROJECT_DIR / "docker-compose.yml"))
 
 # HTTP client for backend communication
@@ -275,7 +279,21 @@ START_TIME = time.time()
 def _get_backend_url() -> str:
     if _get_desired_backend() == "vllm":
         return CONFIG["vllm"]["server_url"]
-    return CONFIG["llamacpp"]["server_url"]
+    env_values = _read_env_file()
+    return (
+        env_values.get("OLLAMA_BASE_URL")
+        or env_values.get("OLLAMA_API_BASE")
+        or os.environ.get("OLLAMA_BASE_URL")
+        or os.environ.get("OLLAMA_API_BASE")
+        or CONFIG["llamacpp"]["server_url"]
+    )
+
+
+def _get_backend_label() -> str:
+    backend = _get_desired_backend()
+    if backend == "llamacpp" and _get_backend_url().rstrip("/").endswith(":11434"):
+        return "ollama/local"
+    return backend
 
 
 def _read_env_file() -> dict[str, str]:
@@ -535,7 +553,7 @@ def _build_setup_status(backend_ready: bool, personaplex_ready: bool) -> SetupSt
     desired_model = _get_desired_model_key()
     return SetupStatusResponse(
         configured=_is_model_configured() or _is_local_model_configured(),
-        backend=_get_desired_backend(),
+        backend=_get_backend_label(),
         desired_model=desired_model,
         recommended_model=recommend_model(),
         models_dir=str(Path(os.environ.get("MODELS_DIR", "/models"))),
@@ -562,16 +580,31 @@ def _get_model_name() -> str:
 
 
 def _get_hermes_model_name() -> str:
-    return (_read_env_file().get("HERMES_MODEL") or os.environ.get("HERMES_MODEL") or "hermes3:8b").strip()
+    env_values = _read_env_file()
+    manager_model = (env_values.get("HERMES_MODEL") or os.environ.get("HERMES_MODEL") or "").strip()
+    return manager_model or _get_model_name()
 
 
 def _agent_subprocess_env() -> dict[str, str]:
     env_values = _read_env_file()
     model = _get_model_name()
+    ollama_base_url = (
+        env_values.get("OLLAMA_API_BASE")
+        or env_values.get("OLLAMA_BASE_URL")
+        or os.environ.get("OLLAMA_API_BASE")
+        or os.environ.get("OLLAMA_BASE_URL")
+        or "http://127.0.0.1:11434"
+    )
     return {
         **os.environ,
-        "OLLAMA_BASE_URL": env_values.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
+        "OLLAMA_BASE_URL": ollama_base_url,
+        "OLLAMA_API_BASE": ollama_base_url,
+        "OLLAMA_NO_CLOUD": env_values.get("OLLAMA_NO_CLOUD") or os.environ.get("OLLAMA_NO_CLOUD") or "true",
         "AIDER_MODEL": env_values.get("AIDER_MODEL", f"ollama_chat/{model}"),
+        "AIDER_PRETTY": "false",
+        "AIDER_STREAM": "false",
+        "AIDER_FANCY_INPUT": "false",
+        "AIDER_NOTIFICATIONS": "false",
         "AIDER_YES_ALWAYS": "true",
         "PYTHONUNBUFFERED": "1",
     }
@@ -608,13 +641,13 @@ def _build_agent_command(request: AgentTaskRequest) -> tuple[str, list[str]]:
             "--model",
             model,
             "--num-ctx",
-            str(int(_read_env_file().get("CTX_SIZE", "8192") or "8192")),
+            str(int(_read_env_file().get("CTX_SIZE", "4096") or "4096")),
             "--expert-provider",
             "ollama",
             "--expert-model",
             model,
             "--expert-num-ctx",
-            str(int(_read_env_file().get("CTX_SIZE", "8192") or "8192")),
+            str(int(_read_env_file().get("CTX_SIZE", "4096") or "4096")),
             "--cowboy-mode",
             "--log-mode",
             "console",
@@ -632,6 +665,14 @@ def _build_agent_command(request: AgentTaskRequest) -> tuple[str, list[str]]:
             "--message",
             task,
             "--yes-always",
+            "--no-pretty",
+            "--no-stream",
+            "--no-fancy-input",
+            "--no-notifications",
+            "--no-show-model-warnings",
+            "--no-check-update",
+            "--encoding",
+            "utf-8",
         ]
 
     raise HTTPException(status_code=400, detail="engine must be 'hermes', 'ra-aid', or 'aider'")
@@ -679,6 +720,40 @@ def _looks_like_startup_inspection(task: str) -> bool:
         "launch this software",
     ])
     return asks_start or ("start" in text and any(word in text for word in ["software", "app", "project", "vestra"]))
+
+
+def _looks_like_broad_agent_task(task: str) -> bool:
+    text = task.lower()
+    if re.search(r"\b(use|run|force)\s+aider\b|\baider\s+(directly|only)\b", text):
+        return False
+
+    broad_terms = [
+        "app-wide",
+        "application",
+        "feature",
+        "implement",
+        "integrate",
+        "refactor",
+        "setup",
+        "wrap",
+        "shell",
+        "pwa",
+        "service worker",
+        "manifest",
+        "dependency",
+        "professional appearance",
+        "behavior",
+    ]
+    if not any(term in text for term in broad_terms):
+        return False
+
+    file_hint = re.search(
+        r"(\b[\w.-]+\.(?:ts|tsx|js|jsx|json|css|scss|html|md|py|ps1|sh|yml|yaml)\b|[/\\][\w.-]+)",
+        task,
+        re.IGNORECASE,
+    )
+    tiny_edit = any(phrase in text for phrase in ["one-line", "typo", "rename ", "change the text", "update the label"])
+    return not (file_hint and tiny_edit)
 
 
 def _is_ra_aid_available() -> tuple[bool, str]:
@@ -754,6 +829,10 @@ Choose the right motor function for this request:
 - ra-aid: senior engineer for repo inspection, research, planning, multi-step work, and broad refactors.
 - aider: junior editor for surgical edits when the target files and change are already clear.
 
+Prefer ra-aid for app-wide features, setup changes, PWA/service-worker/manifest work, dependency changes,
+or any request that requires discovering files before editing. Choose aider only when the request names the
+specific file(s) or the edit is clearly a tiny one-file change.
+
 Return only compact JSON with this schema:
 {{"tool":"inspect"|"ra-aid"|"aider","rationale":"short user-visible reason","delegated_task":"the exact task for the chosen tool"}}
 
@@ -777,6 +856,9 @@ User request:
     tool = str(decision.get("tool", "")).strip().lower()
     if tool not in {"inspect", "ra-aid", "aider"}:
         decision["tool"] = "ra-aid"
+    elif tool == "aider" and _looks_like_broad_agent_task(task):
+        decision["tool"] = "ra-aid"
+        decision["rationale"] = "This looks like app-wide implementation work, so RA.Aid should inspect the repo before editing."
     if not str(decision.get("delegated_task", "")).strip():
         decision["delegated_task"] = task
     if not str(decision.get("rationale", "")).strip():
@@ -975,7 +1057,7 @@ async def health_check():
 
     return HealthResponse(
         status="ok" if backend_ok else "degraded",
-        backend=_get_desired_backend(),
+        backend=_get_backend_label(),
         model=_get_model_name(),
         uptime=time.time() - START_TIME,
     )
@@ -1090,7 +1172,14 @@ class OllamaSelectRequest(BaseModel):
 def _ollama_base_url() -> str:
     """Base URL for the Ollama daemon. Reuses the configured llamacpp URL since
     Ollama serves the OpenAI-compat API at the same host:port."""
-    return CONFIG["llamacpp"]["server_url"].rstrip("/")
+    env_values = _read_env_file()
+    return (
+        env_values.get("OLLAMA_BASE_URL")
+        or env_values.get("OLLAMA_API_BASE")
+        or os.environ.get("OLLAMA_BASE_URL")
+        or os.environ.get("OLLAMA_API_BASE")
+        or CONFIG["llamacpp"]["server_url"]
+    ).rstrip("/")
 
 
 @app.get("/api/ollama/library")
@@ -1479,6 +1568,7 @@ async def _agent_process_events(request: AgentTaskRequest, cwd: Path, timeout: i
     deadline = time.monotonic() + timeout
     timed_out = False
     exit_code = 124
+    last_status_at = 0.0
 
     try:
         while True:
@@ -1492,7 +1582,10 @@ async def _agent_process_events(request: AgentTaskRequest, cwd: Path, timeout: i
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=min(1.0, remaining))
             except asyncio.TimeoutError:
-                yield {"type": "status", "message": f"{engine} is still working..."}
+                now = time.monotonic()
+                if now - last_status_at >= 10.0:
+                    yield {"type": "status", "message": f"{engine} is still working..."}
+                    last_status_at = now
                 continue
 
             if event["type"] == "process_done":

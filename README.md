@@ -66,7 +66,7 @@ PSC uses a split-brain local agent architecture:
   - `ra_aid_task`
   - `aider_task`
 
-RA.Aid and aider are installed into `IPE/llm-server/.venv` from [IPE/llm-server/requirements.txt](IPE/llm-server/requirements.txt). The default local model is configured through `LLM_MODEL` in `IPE/.env`; the current fast default is `qwen2.5-coder:7b`.
+RA.Aid and aider are installed into `IPE/llm-server/.venv` from [IPE/llm-server/requirements.txt](IPE/llm-server/requirements.txt). The default local model is configured through `LLM_MODEL` in `IPE/.env`; the current default is `deepseek-coder-v2:16b`.
 
 To use the MCP server from an MCP client, run:
 
@@ -74,7 +74,7 @@ To use the MCP server from an MCP client, run:
 npm run mcp:agent
 ```
 
-The MCP server reads `PSC_TARGET_WORKSPACE`, `LLM_MODEL`, `OLLAMA_BASE_URL`, and `CTX_SIZE` from the environment when provided.
+The MCP server reads `PSC_TARGET_WORKSPACE`, `LLM_MODEL`, `OLLAMA_BASE_URL`/`OLLAMA_API_BASE`, and `CTX_SIZE` from the environment when provided. Leave `HERMES_MODEL` blank to run the Lila Agent manager framework on the selected `LLM_MODEL`.
 
 ---
 
@@ -162,17 +162,19 @@ Queries are opened with SQLite `mode=ro` and limited to read-only `SELECT`, `WIT
 
 PSC expects Ollama to be available at `http://127.0.0.1:11434`.
 
-Recommended fast local setup:
+Recommended local setup:
 
 ```bash
-ollama pull qwen2.5-coder:7b
+ollama pull deepseek-coder-v2:16b
 ```
 
 Then confirm `IPE/.env` contains:
 
 ```bash
 LLM_BACKEND=llamacpp
-LLM_MODEL=qwen2.5-coder:7b
+LLM_MODEL=deepseek-coder-v2:16b
+HERMES_MODEL=
+CTX_SIZE=4096
 MEMPALACE_ENABLED=false
 PERSONAPLEX_ENABLED=false
 ```
@@ -192,8 +194,12 @@ START_LLM_SERVER=true
 OPEN_WINDOW=true
 HOST_WORKSPACE=..
 PSC_TARGET_WORKSPACE=..
-LLM_MODEL=qwen2.5-coder:7b
-CTX_SIZE=8192
+LLM_MODEL=deepseek-coder-v2:16b
+HERMES_MODEL=
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_API_BASE=http://127.0.0.1:11434
+OLLAMA_NO_CLOUD=true
+CTX_SIZE=4096
 MEMPALACE_ENABLED=false
 PERSONAPLEX_ENABLED=false
 ```
@@ -215,9 +221,9 @@ Use `npm run bootstrap` after dependency changes instead of raw `yarn install`.
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Agent says a tool is missing | Python venv is stale | `IPE\llm-server\.venv\Scripts\python.exe -m pip install -r IPE\llm-server\requirements.txt` |
-| Slow responses | Model too large or memory/persona sidecars enabled | Use `qwen2.5-coder:7b`, keep `MEMPALACE_ENABLED=false` and `PERSONAPLEX_ENABLED=false` |
+| Slow responses | Model too large or memory/persona sidecars enabled | Use a smaller pulled local model, keep `MEMPALACE_ENABLED=false` and `PERSONAPLEX_ENABLED=false` |
 | `/api/chat` returns 503 | FastAPI server is down | `npm run logs:llm`, then `npm run stop && npm start` |
-| Aider/RA.Aid fails to run | Ollama model missing | `ollama pull qwen2.5-coder:7b` |
+| Aider/RA.Aid fails to run | Ollama model missing | `ollama pull deepseek-coder-v2:16b` |
 | Native module error | Theia native modules not rebuilt | `npm run bootstrap` |
 
 ### Key Features

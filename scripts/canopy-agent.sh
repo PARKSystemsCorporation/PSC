@@ -7,8 +7,8 @@ set -euo pipefail
 
 agent="${1:-ra-aid}"
 psc_win_root="${PSC_WIN_ROOT:-C:\\PSC}"
-model="${LLM_MODEL:-qwen2.5-coder:7b}"
-ctx_size="${CTX_SIZE:-8192}"
+model="${LLM_MODEL:-deepseek-coder-v2:16b}"
+ctx_size="${CTX_SIZE:-4096}"
 
 if ! command -v wslpath >/dev/null 2>&1; then
   echo "canopy-agent.sh must run inside WSL so it can translate paths with wslpath." >&2
@@ -21,11 +21,11 @@ venv_scripts="${psc_win_root}\\IPE\\llm-server\\.venv\\Scripts"
 case "$agent" in
   ra-aid|ra_aid|raid)
     exe="${venv_scripts}\\ra-aid.exe"
-    ps_command="Set-Location -LiteralPath '${workspace_win}'; \$env:PSC_TARGET_WORKSPACE='${workspace_win}'; \$env:LLM_MODEL='${model}'; \$env:OLLAMA_BASE_URL='http://127.0.0.1:11434'; & '${exe}' --provider ollama --model '${model}' --num-ctx '${ctx_size}' --expert-provider ollama --expert-model '${model}' --expert-num-ctx '${ctx_size}' --use-aider --log-mode console"
+    ps_command="Set-Location -LiteralPath '${workspace_win}'; \$env:PSC_TARGET_WORKSPACE='${workspace_win}'; \$env:LLM_MODEL='${model}'; \$env:OLLAMA_BASE_URL='http://127.0.0.1:11434'; \$env:OLLAMA_API_BASE='http://127.0.0.1:11434'; & '${exe}' --provider ollama --model '${model}' --num-ctx '${ctx_size}' --expert-provider ollama --expert-model '${model}' --expert-num-ctx '${ctx_size}' --use-aider --log-mode console"
     ;;
   aider)
     exe="${venv_scripts}\\aider.exe"
-    ps_command="Set-Location -LiteralPath '${workspace_win}'; \$env:PSC_TARGET_WORKSPACE='${workspace_win}'; \$env:LLM_MODEL='${model}'; \$env:OLLAMA_BASE_URL='http://127.0.0.1:11434'; & '${exe}' --model 'ollama_chat/${model}'"
+    ps_command="Set-Location -LiteralPath '${workspace_win}'; \$env:PSC_TARGET_WORKSPACE='${workspace_win}'; \$env:LLM_MODEL='${model}'; \$env:OLLAMA_BASE_URL='http://127.0.0.1:11434'; \$env:OLLAMA_API_BASE='http://127.0.0.1:11434'; & '${exe}' --model 'ollama_chat/${model}' --no-pretty --no-stream --no-fancy-input --no-notifications --no-show-model-warnings --no-check-update --encoding utf-8"
     ;;
   *)
     echo "Unknown canopy agent '${agent}'. Use 'ra-aid' or 'aider'." >&2

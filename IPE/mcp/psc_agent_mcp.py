@@ -20,23 +20,61 @@ from typing import Any
 
 
 PROTOCOL_VERSION = "2024-11-05"
+DEFAULT_ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+
+
+def _read_env_file() -> dict[str, str]:
+    env_file = Path(os.environ.get("ENV_FILE", str(DEFAULT_ENV_FILE)))
+    if not env_file.exists():
+        return {}
+
+    entries: dict[str, str] = {}
+    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        entries[key.strip()] = value.strip()
+    return entries
 
 
 def _workspace() -> Path:
-    raw = os.environ.get("PSC_TARGET_WORKSPACE") or os.environ.get("HOST_WORKSPACE") or os.getcwd()
+    env_values = _read_env_file()
+    raw = (
+        os.environ.get("PSC_TARGET_WORKSPACE")
+        or os.environ.get("HOST_WORKSPACE")
+        or env_values.get("PSC_TARGET_WORKSPACE")
+        or env_values.get("HOST_WORKSPACE")
+        or os.getcwd()
+    )
     return Path(raw).resolve()
 
 
 def _model() -> str:
-    return os.environ.get("LLM_MODEL", "qwen2.5-coder:7b")
+    env_values = _read_env_file()
+    return os.environ.get("LLM_MODEL") or env_values.get("LLM_MODEL") or "deepseek-coder-v2:16b"
 
 
 def _agent_env() -> dict[str, str]:
     model = _model()
+    env_values = _read_env_file()
+    ollama_base_url = (
+        os.environ.get("OLLAMA_API_BASE")
+        or os.environ.get("OLLAMA_BASE_URL")
+        or env_values.get("OLLAMA_API_BASE")
+        or env_values.get("OLLAMA_BASE_URL")
+        or "http://127.0.0.1:11434"
+    )
     return {
         **os.environ,
-        "OLLAMA_BASE_URL": os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
+        "OLLAMA_BASE_URL": ollama_base_url,
+        "OLLAMA_API_BASE": ollama_base_url,
+        "OLLAMA_NO_CLOUD": env_values.get("OLLAMA_NO_CLOUD") or os.environ.get("OLLAMA_NO_CLOUD") or "true",
         "AIDER_MODEL": os.environ.get("AIDER_MODEL", f"ollama_chat/{model}"),
+        "AIDER_PRETTY": "false",
+        "AIDER_STREAM": "false",
+        "AIDER_FANCY_INPUT": "false",
+        "AIDER_NOTIFICATIONS": "false",
         "AIDER_YES_ALWAYS": "true",
         "PYTHONUNBUFFERED": "1",
     }
@@ -197,13 +235,13 @@ def _call_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
                     "--model",
                     model,
                     "--num-ctx",
-                    os.environ.get("CTX_SIZE", "8192"),
+                    os.environ.get("CTX_SIZE", "4096"),
                     "--expert-provider",
                     "ollama",
                     "--expert-model",
                     model,
                     "--expert-num-ctx",
-                    os.environ.get("CTX_SIZE", "8192"),
+                    os.environ.get("CTX_SIZE", "4096"),
                     "--cowboy-mode",
                     "--log-mode",
                     "console",
@@ -218,7 +256,27 @@ def _call_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         task = str(args.get("task") or "").strip()
         if not task:
             raise ValueError("task is required")
-        return _tool_result(_run([_exe("aider"), "--model", f"ollama_chat/{model}", "--message", task, "--yes-always"], timeout=timeout))
+        return _tool_result(
+            _run(
+                [
+                    _exe("aider"),
+                    "--model",
+                    f"ollama_chat/{model}",
+                    "--message",
+                    task,
+                    "--yes-always",
+                    "--no-pretty",
+                    "--no-stream",
+                    "--no-fancy-input",
+                    "--no-notifications",
+                    "--no-show-model-warnings",
+                    "--no-check-update",
+                    "--encoding",
+                    "utf-8",
+                ],
+                timeout=timeout,
+            )
+        )
     if name == "currency_sqlite_schema":
         return _tool_result(_sqlite_schema())
     if name == "currency_sqlite_read":
