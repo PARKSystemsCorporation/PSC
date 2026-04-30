@@ -1,8 +1,7 @@
 param(
     [string]$VestraPath = "C:\vestra",
     [string]$LilaPath = "C:\lila",
-    [string]$Model = "",
-    [switch]$UseAiderOnly
+    [string]$Model = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,26 +32,17 @@ function New-AgentCommand {
     param(
         [string]$Workspace,
         [string]$Label,
-        [string]$ModelName,
-        [bool]$AiderOnly
+        [string]$ModelName
     )
 
     $repoRoot = Resolve-Path "$PSScriptRoot\.."
     $venvScripts = Join-Path $repoRoot "IPE\llm-server\.venv\Scripts"
-    $raAid = Join-Path $venvScripts "ra-aid.exe"
     $aider = Join-Path $venvScripts "aider.exe"
 
-    if ($AiderOnly) {
-        if (-not (Test-Path $aider)) {
-            throw "aider.exe was not found at $aider"
-        }
-        return "Set-Location -LiteralPath '$Workspace'; `$env:PSC_TARGET_WORKSPACE='$Workspace'; `$env:LLM_MODEL='$ModelName'; `$env:OLLAMA_BASE_URL='http://127.0.0.1:11434'; `$env:OLLAMA_API_BASE='http://127.0.0.1:11434'; Write-Host '[$Label] Lila Agent-managed aider motor on $Workspace'; & '$aider' --model 'ollama_chat/$ModelName' --no-pretty --no-stream --no-fancy-input --no-notifications --no-show-model-warnings --no-check-update --encoding utf-8"
+    if (-not (Test-Path $aider)) {
+        throw "aider.exe was not found at $aider"
     }
-
-    if (-not (Test-Path $raAid)) {
-        throw "ra-aid.exe was not found at $raAid"
-    }
-    return "Set-Location -LiteralPath '$Workspace'; `$env:PSC_TARGET_WORKSPACE='$Workspace'; `$env:LLM_MODEL='$ModelName'; `$env:OLLAMA_BASE_URL='http://127.0.0.1:11434'; `$env:OLLAMA_API_BASE='http://127.0.0.1:11434'; Write-Host '[$Label] Lila Agent-managed RA.Aid + aider motor on $Workspace'; & '$raAid' --provider ollama --model '$ModelName' --num-ctx '4096' --expert-provider ollama --expert-model '$ModelName' --expert-num-ctx '4096' --use-aider --log-mode console"
+    return "Set-Location -LiteralPath '$Workspace'; `$env:PSC_TARGET_WORKSPACE='$Workspace'; `$env:LLM_MODEL='$ModelName'; `$env:OLLAMA_BASE_URL='http://127.0.0.1:11434'; `$env:OLLAMA_API_BASE='http://127.0.0.1:11434'; Write-Host '[$Label] Lila Agent-managed aider motor on $Workspace'; & '$aider' --model 'ollama_chat/$ModelName' --no-pretty --no-stream --no-fancy-input --no-notifications --no-show-model-warnings --no-check-update --encoding utf-8"
 }
 
 Assert-Path $VestraPath
@@ -64,8 +54,8 @@ if (-not $modelName) {
     $modelName = "deepseek-coder-v2:16b"
 }
 
-$vestraCommand = New-AgentCommand -Workspace $VestraPath -Label "Vestra" -ModelName $modelName -AiderOnly:$UseAiderOnly
-$lilaCommand = New-AgentCommand -Workspace $LilaPath -Label "Lila" -ModelName $modelName -AiderOnly:$UseAiderOnly
+$vestraCommand = New-AgentCommand -Workspace $VestraPath -Label "Vestra" -ModelName $modelName
+$lilaCommand = New-AgentCommand -Workspace $LilaPath -Label "Lila" -ModelName $modelName
 
 if (Get-Command wt.exe -ErrorAction SilentlyContinue) {
     & wt.exe new-tab --title "Lila Agent - Vestra" powershell.exe -NoExit -NoProfile -ExecutionPolicy Bypass -Command $vestraCommand `; new-tab --title "Lila Agent - Lila" powershell.exe -NoExit -NoProfile -ExecutionPolicy Bypass -Command $lilaCommand

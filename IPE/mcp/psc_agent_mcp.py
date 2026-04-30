@@ -2,8 +2,8 @@
 """PSC local agent MCP server.
 
 This is a small stdio MCP wrapper around the same local tools PSC exposes in
-the IDE: git pull, RA.Aid as the planning/tool brain, and aider as the editing
-hand. It intentionally uses only the Python standard library so it can run
+the IDE: git pull, local aider editing, and read-only SQLite helpers.
+It intentionally uses only the Python standard library so it can run
 inside the existing llm-server venv.
 """
 
@@ -220,18 +220,6 @@ def _tools() -> list[dict[str, Any]]:
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
         },
         {
-            "name": "ra_aid_task",
-            "description": "Use RA.Aid as the autonomous planning/tool brain, with aider enabled for edits.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "task": {"type": "string"},
-                    "timeout": {"type": "integer", "default": 1800},
-                },
-                "required": ["task"],
-            },
-        },
-        {
             "name": "aider_task",
             "description": "Use aider directly as the coding hand for a one-shot edit task.",
             "inputSchema": {
@@ -269,36 +257,6 @@ def _call_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
     timeout = int(args.get("timeout") or 1800)
     if name == "git_pull":
         return _tool_result(_run(["git", "pull", "--ff-only"], timeout=300))
-    if name == "ra_aid_task":
-        task = str(args.get("task") or "").strip()
-        if not task:
-            raise ValueError("task is required")
-        return _tool_result(
-            _run(
-                [
-                    _exe("ra-aid"),
-                    "--provider",
-                    "ollama",
-                    "--model",
-                    model,
-                    "--num-ctx",
-                    os.environ.get("CTX_SIZE", "4096"),
-                    "--expert-provider",
-                    "ollama",
-                    "--expert-model",
-                    model,
-                    "--expert-num-ctx",
-                    os.environ.get("CTX_SIZE", "4096"),
-                    "--cowboy-mode",
-                    "--log-mode",
-                    "console",
-                    "--use-aider",
-                    "-m",
-                    task,
-                ],
-                timeout=timeout,
-            )
-        )
     if name == "aider_task":
         task = str(args.get("task") or "").strip()
         if not task:

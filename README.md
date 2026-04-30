@@ -4,8 +4,8 @@
 
 PSC is a local-first coding IDE built on [Eclipse Theia](https://theia-ide.org/). It runs natively on Windows, serves the IDE through a local proxy, and uses local Ollama models for chat/completion while delegating serious coding work to open-source agent tools:
 
-- **RA.Aid** as the planning/tool brain
-- **aider** as the code-editing hand
+- **Lila Agent** as the local supervisor
+- **aider** as the file-seeded code-editing hand
 - **MCP wrapper** for tool access from compatible clients
 
 > **Status:** Beta. The Windows native path is the primary supported path today. macOS/Linux can run the IDE, but the automatic LLM/server launcher is Windows-focused.
@@ -58,15 +58,14 @@ Telegram has been removed from the default runtime path. PSC is now focused on f
 PSC uses a split-brain local agent architecture:
 
 - Simple chat/completion still goes through the local Ollama-backed LLM server.
-- Normal Agent mode delegates coding tasks to **RA.Aid** with `--use-aider`.
+- Normal Agent mode supervises local **aider** revisions with seeded project files.
 - Requests that explicitly mention aider can run **aider** directly.
 - Git update requests are handled as a direct approved `git pull --ff-only`.
 - The MCP server at [IPE/mcp/psc_agent_mcp.py](IPE/mcp/psc_agent_mcp.py) exposes:
   - `git_pull`
-  - `ra_aid_task`
   - `aider_task`
 
-RA.Aid and aider are installed into `IPE/llm-server/.venv` from [IPE/llm-server/requirements.txt](IPE/llm-server/requirements.txt). The default local model is configured through `LLM_MODEL` in `IPE/.env`; the current default is `deepseek-coder-v2:16b`.
+aider is installed into `IPE/llm-server/.venv` from [IPE/llm-server/requirements.txt](IPE/llm-server/requirements.txt). The default local model is configured through `LLM_MODEL` in `IPE/.env`; the current default is `deepseek-coder-v2:16b`.
 
 To use the MCP server from an MCP client, run:
 
@@ -82,7 +81,7 @@ The MCP server reads `PSC_TARGET_WORKSPACE`, `LLM_MODEL`, `OLLAMA_BASE_URL`/`OLL
 
 PSC includes a Windows launcher for [isacssw/canopy](https://github.com/isacssw/canopy), a `tmux` TUI for supervising multiple coding agents across git worktrees.
 
-Canopy itself runs best from WSL on Windows because it requires `tmux`. This is not Docker and not a Linux container runtime. PSC, Ollama, RA.Aid, aider, and the FastAPI bridge still run natively on Windows; WSL is only the local terminal/session substrate for Canopy.
+Canopy itself runs best from WSL on Windows because it requires `tmux`. This is not Docker and not a Linux container runtime. PSC, Ollama, aider, and the FastAPI bridge still run natively on Windows; WSL is only the local terminal/session substrate for Canopy.
 
 Check prerequisites without fetching anything:
 
@@ -112,7 +111,7 @@ Need two autonomous agents before WSL/Canopy is ready? Use the native Windows fa
 npm run agents:dual
 ```
 
-That opens two terminal tabs and runs Lila Agent-managed RA.Aid/aider motor sessions in `C:\vestra` and `C:\lila` at the same time. It does not provide Canopy's supervision UI, but it gives you immediate parallel autonomous work without Docker, containers, or WSL.
+That opens two terminal tabs and runs Lila Agent-managed aider motor sessions in `C:\vestra` and `C:\lila` at the same time. It does not provide Canopy's supervision UI, but it gives you immediate parallel autonomous work without Docker, containers, or WSL.
 
 Then launch both project dashboards from Windows:
 
@@ -127,8 +126,8 @@ This opens two Canopy tabs:
 
 Canopy is the primary dashboard for the parallel agents. PSC writes the WSL Canopy config automatically with two local agent profiles:
 
-- `psc-ra-aid` - RA.Aid planner/tool brain with aider enabled
-- `psc-aider` - aider direct editing hand
+- `psc-aider-vestra` - aider editing hand
+- `psc-aider-lila` - aider editing hand
 
 To prepare separate git worktrees for the two primary agents before launching:
 
@@ -204,7 +203,7 @@ MEMPALACE_ENABLED=false
 PERSONAPLEX_ENABLED=false
 ```
 
-`PSC_TARGET_WORKSPACE` controls where RA.Aid, aider, git commands, and file tools operate.
+`PSC_TARGET_WORKSPACE` controls where aider, git commands, and file tools operate.
 
 ---
 
@@ -223,15 +222,15 @@ Use `npm run bootstrap` after dependency changes instead of raw `yarn install`.
 | Agent says a tool is missing | Python venv is stale | `IPE\llm-server\.venv\Scripts\python.exe -m pip install -r IPE\llm-server\requirements.txt` |
 | Slow responses | Model too large or memory/persona sidecars enabled | Use a smaller pulled local model, keep `MEMPALACE_ENABLED=false` and `PERSONAPLEX_ENABLED=false` |
 | `/api/chat` returns 503 | FastAPI server is down | `npm run logs:llm`, then `npm run stop && npm start` |
-| Aider/RA.Aid fails to run | Ollama model missing | `ollama pull deepseek-coder-v2:16b` |
+| Aider fails to run | Ollama model missing | `ollama pull deepseek-coder-v2:16b` |
 | Native module error | Theia native modules not rebuilt | `npm run bootstrap` |
 
 ### Key Features
 
 - **Theia IDE** - VS Code-style local development environment
 - **Local Ollama Models** - Chat and completion without cloud dependency
-- **RA.Aid + aider Agent Mode** - Open-source autonomous planning plus code edits
-- **MCP Agent Server** - `git_pull`, `ra_aid_task`, and `aider_task` over stdio
+- **Lila Agent + aider Agent Mode** - supervised local planning plus code edits
+- **MCP Agent Server** - `git_pull` and `aider_task` over stdio
 - **Fast Local Defaults** - Smaller coder model, memory/persona sidecars off
 - **One-Command Launcher** - `npm start` brings up the working local stack
 

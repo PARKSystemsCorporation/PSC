@@ -41,7 +41,7 @@ type ChatTab = 'chat' | 'preview';
 
 type ChatMode = 'code' | 'debug';
 
-type AgentRoute = 'hermes' | 'ra-aid' | 'aider';
+type AgentRoute = 'hermes' | 'aider';
 
 /**
  * Footer mode → Ollama tag mapping. Clicking a mode in the footer swaps the
@@ -354,14 +354,13 @@ export class AiChatWidget extends ReactWidget {
         const content = userMsg.content;
         const engine =
             this.agentRoute === 'aider' || (/\baider\b/i.test(content) && !/\bra[\.\- ]?aid\b/i.test(content)) ? 'aider' :
-            this.agentRoute === 'ra-aid' || /\bra[\.\- ]?aid\b/i.test(content) ? 'ra-aid' :
             'hermes';
         const call: GemmaProtocol.AgentToolCall = {
-            name: engine === 'aider' ? 'aider_task' : (engine === 'ra-aid' ? 'ra_aid_task' : 'hermes_task'),
+            name: engine === 'aider' ? 'aider_task' : 'hermes_task',
             args: {
                 task: this.buildExternalAgentTask(userMsg),
                 engine,
-                use_aider: engine === 'ra-aid',
+                use_aider: false,
                 timeout: 1800,
                 max_revisions: 3,
                 run_id: this.generateId(),
@@ -510,7 +509,7 @@ export class AiChatWidget extends ReactWidget {
             data.engine === 'hermes' ? 'Lila Agent' :
             call.name === 'aider_task' ? 'aider' :
             call.name === 'hermes_task' ? `Lila Agent -> ${data.engine}` :
-            'RA.Aid + aider';
+            'Lila Agent';
         return `${label} finished with exit code ${data.exit_code}.${details}`;
     }
 
@@ -1253,7 +1252,6 @@ export class AiChatWidget extends ReactWidget {
             case 'list_dir': return 'codicon-folder-opened';
             case 'run_command': return 'codicon-terminal';
             case 'hermes_task': return 'codicon-circuit-board';
-            case 'ra_aid_task': return 'codicon-rocket';
             case 'aider_task': return 'codicon-tools';
             default: return 'codicon-symbol-method';
         }
@@ -1266,7 +1264,6 @@ export class AiChatWidget extends ReactWidget {
             case 'write_file': return `${call.args?.path || '(no path)'} (${(call.args?.content?.length ?? 0).toLocaleString()} chars)`;
             case 'run_command': return call.args?.command || '(no command)';
             case 'hermes_task': return call.args?.task || '(no task)';
-            case 'ra_aid_task': return call.args?.task || '(no task)';
             case 'aider_task': return call.args?.task || '(no task)';
             default: return JSON.stringify(call.args);
         }
@@ -1323,7 +1320,7 @@ export class AiChatWidget extends ReactWidget {
                         Exit {r.exit_code}{r.timed_out ? ' (timed out)' : ''}
                     </div>
                 );
-            } else if ((result.name === 'hermes_task' || result.name === 'ra_aid_task' || result.name === 'aider_task') && r) {
+            } else if ((result.name === 'hermes_task' || result.name === 'aider_task') && r) {
                 body = (
                     <div className="gemma-tool-meta">
                         {r.engine} exit {r.exit_code}{r.timed_out ? ' (timed out)' : ''}
@@ -1608,13 +1605,11 @@ export class AiChatWidget extends ReactWidget {
 
     private renderAgentControlPanel(): React.ReactNode {
         const routes: Array<{ id: AgentRoute; label: string; icon: string; title: string }> = [
-            { id: 'hermes', label: 'Lila Agent', icon: 'codicon-circuit-board', title: 'Always-on manager that delegates to RA.Aid or aider' },
-            { id: 'ra-aid', label: 'RA.Aid', icon: 'codicon-rocket', title: 'Force the senior engineer motor function for this task' },
+            { id: 'hermes', label: 'Lila Agent', icon: 'codicon-circuit-board', title: 'Always-on manager that supervises local aider revisions' },
             { id: 'aider', label: 'aider', icon: 'codicon-tools', title: 'Force the focused editor motor function for this task' },
         ];
         const routeCopy: Record<AgentRoute, string> = {
-            hermes: 'Manager -> motor functions',
-            'ra-aid': 'Forced senior engineer',
+            hermes: 'Manager -> supervised aider',
             aider: 'Forced editor',
         };
 
@@ -1705,7 +1700,7 @@ export class AiChatWidget extends ReactWidget {
                     </div>
                     <button
                         className={`gemma-agent-toggle ${this.agentMode ? 'on' : 'off'}`}
-                        title={this.agentMode ? 'Agent mode ON - Lila Agent can delegate to RA.Aid/aider and run approved workspace tools' : 'Agent mode OFF - chat-only'}
+                        title={this.agentMode ? 'Agent mode ON - Lila Agent can supervise local aider and run approved workspace tools' : 'Agent mode OFF - chat-only'}
                         onClick={() => { this.agentMode = !this.agentMode; this.update(); }}
                         disabled={this.isGenerating}
                     >
@@ -1736,7 +1731,7 @@ export class AiChatWidget extends ReactWidget {
                             {this.messages.length === 0 && (
                                 <div className="gemma-chat-welcome">
                                     <h3>Lila Agent Console</h3>
-                                    <p>Lila Agent manages coding work. It delegates to RA.Aid or aider when useful, and Canopy handles multi-worktree supervision.</p>
+                                    <p>Lila Agent manages coding work with supervised local aider revisions, and Canopy handles multi-worktree supervision.</p>
                                     <div className="gemma-welcome-grid">
                                         <button onClick={() => { this.agentRoute = 'hermes'; this.inputValue = 'Build this end to end:'; this.update(); }}>
                                             <span className="codicon codicon-circuit-board" /> Ask Lila

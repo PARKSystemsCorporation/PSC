@@ -92,7 +92,7 @@ if (-not (Test-Command "wsl.exe")) {
 }
 
 if (-not (Test-WslShell)) {
-    throw "No ready WSL distro was detected. PSC will not install WSL automatically in offline-primary mode. Run `npm run canopy:check` for details."
+    throw "No ready WSL distro was detected. PSC will not install WSL automatically in offline-primary mode. Run npm run canopy:check for details."
 }
 
 $repos = @(
@@ -123,8 +123,8 @@ mkdir -p ~/.config/canopy
 cat > ~/.config/canopy/config.json <<'JSON'
 {
   "agents": [
-    { "name": "psc-ra-aid", "command": "bash $pscWsl/scripts/canopy-agent.sh ra-aid" },
-    { "name": "psc-aider", "command": "bash $pscWsl/scripts/canopy-agent.sh aider" }
+    { "name": "psc-aider-vestra", "command": "bash $pscWsl/scripts/canopy-agent.sh aider" },
+    { "name": "psc-aider-lila", "command": "bash $pscWsl/scripts/canopy-agent.sh aider" }
   ],
   "left_panel_width": 42,
   "theme": "github-dark",

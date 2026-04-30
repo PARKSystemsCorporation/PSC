@@ -189,10 +189,10 @@ class ExecuteResponse(BaseModel):
 
 class AgentTaskRequest(BaseModel):
     task: str = Field(..., description="Natural-language coding task")
-    engine: str = Field("hermes", description="Agent engine: hermes, ra-aid, or aider")
+    engine: str = Field("hermes", description="Agent engine: hermes or aider")
     cwd: Optional[str] = Field(None, description="Optional working directory inside the target workspace")
     timeout: int = Field(1800, description="Timeout in seconds")
-    use_aider: bool = Field(True, description="For RA.Aid, delegate implementation edits to aider")
+    use_aider: bool = Field(False, description="Legacy compatibility flag; aider is the supported edit motor")
     max_revisions: int = Field(3, description="Maximum supervised revision attempts before stopping")
     steering_context: str = Field("", description="Optional user steering to apply on the next revision")
     run_id: str = Field("", description="Client-generated id for live steering")
@@ -692,30 +692,6 @@ def _build_agent_command(request: AgentTaskRequest) -> tuple[str, list[str]]:
 
     model = _get_model_name()
     engine = request.engine.strip().lower()
-    if engine in {"ra", "raid", "ra.aid", "ra-aid"}:
-        args = [
-            _agent_executable("ra-aid"),
-            "--provider",
-            "ollama",
-            "--model",
-            model,
-            "--num-ctx",
-            str(int(_read_env_file().get("CTX_SIZE", "4096") or "4096")),
-            "--expert-provider",
-            "ollama",
-            "--expert-model",
-            model,
-            "--expert-num-ctx",
-            str(int(_read_env_file().get("CTX_SIZE", "4096") or "4096")),
-            "--cowboy-mode",
-            "--log-mode",
-            "console",
-        ]
-        if request.use_aider:
-            args.append("--use-aider")
-        args.extend(["-m", task])
-        return "ra-aid", args
-
     if engine == "aider":
         args = [
             _agent_executable("aider"),
@@ -736,7 +712,7 @@ def _build_agent_command(request: AgentTaskRequest) -> tuple[str, list[str]]:
         args.extend(["--message", task])
         return "aider", args
 
-    raise HTTPException(status_code=400, detail="engine must be 'hermes', 'ra-aid', or 'aider'")
+    raise HTTPException(status_code=400, detail="engine must be 'hermes' or 'aider'")
 
 
 def _read_manager_memory(cwd: Path) -> str:
@@ -865,14 +841,6 @@ def _aider_seed_files(cwd: Path, task: str) -> list[str]:
     return files
 
 
-def _is_ra_aid_available() -> tuple[bool, str]:
-    try:
-        __import__("ra_aid")
-        return True, ""
-    except Exception as error:
-        return False, str(error)
-
-
 def _read_json_file(path: Path) -> dict[str, Any]:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -934,16 +902,14 @@ async def _ask_hermes_manager(task: str, cwd: Path) -> dict[str, Any]:
     memory_block = memory if memory else "(No MEMORY.md, AGENTS.md, CLAUDE.md, or memory.md found.)"
     prompt = f"""You are Lila Agent, the always-on local coding-agent manager for PARK Systems Coder.
 
-Choose the right motor function for this request:
-- ra-aid: senior engineer for repo inspection, research, planning, multi-step work, and broad refactors.
-- aider: junior editor for surgical edits when the target files and change are already clear.
+Choose the right local action for this request:
+- inspect: read local startup/project files directly for run/start questions.
+- aider: supervised local coding motor for edits, feature work, setup changes, PWA/service-worker/manifest work, dependency changes, and refactors.
 
-Prefer ra-aid for app-wide features, setup changes, PWA/service-worker/manifest work, dependency changes,
-or any request that requires discovering files before editing. Choose aider only when the request names the
-specific file(s) or the edit is clearly a tiny one-file change.
+PSC will seed relevant project files and run supervised revisions around aider, so choose aider for coding work even when files must be discovered.
 
 Return only compact JSON with this schema:
-{{"tool":"inspect"|"ra-aid"|"aider","rationale":"short user-visible reason","delegated_task":"the exact task for the chosen tool"}}
+{{"tool":"inspect"|"aider","rationale":"short user-visible reason","delegated_task":"the exact task for the chosen tool"}}
 
 Project memory:
 {memory_block}
@@ -963,11 +929,11 @@ User request:
     content = await _complete_backend(payload, model_override=_get_hermes_model_name())
     decision = _extract_json_object(content)
     tool = str(decision.get("tool", "")).strip().lower()
-    if tool not in {"inspect", "ra-aid", "aider"}:
-        decision["tool"] = "ra-aid"
+    if tool not in {"inspect", "aider"}:
+        decision["tool"] = "aider"
     elif tool == "aider" and _looks_like_broad_agent_task(task):
-        decision["tool"] = "ra-aid"
-        decision["rationale"] = "This looks like app-wide implementation work, so RA.Aid should inspect the repo before editing."
+        decision["tool"] = "aider"
+        decision["rationale"] = "This looks like app-wide implementation work, so Lila Agent will supervise file-seeded aider revisions."
     if not str(decision.get("delegated_task", "")).strip():
         decision["delegated_task"] = task
     if not str(decision.get("rationale", "")).strip():
@@ -1669,25 +1635,6 @@ async def execute_command(request: ExecuteRequest):
 # ---------------------------------------------------------------------------
 
 async def _agent_process_events(request: AgentTaskRequest, cwd: Path, timeout: int) -> AsyncIterator[dict[str, Any]]:
-    if request.engine.strip().lower() in {"ra", "raid", "ra.aid", "ra-aid"}:
-        available, reason = _is_ra_aid_available()
-        if not available:
-            response = AgentTaskResponse(
-                engine="ra-aid",
-                command="ra-aid dependency check",
-                cwd=str(cwd),
-                exit_code=1,
-                stdout="",
-                stderr=f"RA.Aid is not available in the current Python environment: {reason}",
-                timed_out=False,
-            )
-            yield {
-                "type": "status",
-                "message": "RA.Aid is currently unavailable; its Python dependency set needs repair.",
-            }
-            yield {"type": "done", "result": response.model_dump()}
-            return
-
     engine, args = _build_agent_command(request)
     display_command = subprocess.list2cmdline(args) if os.name == "nt" else " ".join(shlex.quote(arg) for arg in args)
     stdout_parts: list[str] = []
@@ -1791,7 +1738,7 @@ async def _agent_process_events(request: AgentTaskRequest, cwd: Path, timeout: i
 
 @app.post("/api/agent/task", response_model=AgentTaskResponse)
 async def run_agent_task(request: AgentTaskRequest):
-    """Run a PSC MCP-style agent tool: RA.Aid for planning, aider for edits."""
+    """Run a PSC MCP-style agent tool: Lila manager or local aider edits."""
     cwd = _resolve_execution_cwd(request.cwd)
     timeout = max(1, min(request.timeout, 3600))
     if request.engine.strip().lower() == "hermes":
@@ -1799,25 +1746,23 @@ async def run_agent_task(request: AgentTaskRequest):
             return _inspect_startup(cwd)
         try:
             decision = await _ask_hermes_manager(request.task, cwd)
-            delegated_engine = str(decision.get("tool", "ra-aid")).strip().lower()
+            delegated_engine = str(decision.get("tool", "aider")).strip().lower()
             if delegated_engine == "inspect":
                 return _inspect_startup(cwd)
-            if delegated_engine == "ra-aid" and not _is_ra_aid_available()[0]:
-                delegated_engine = "aider"
             request = AgentTaskRequest(
                 task=str(decision.get("delegated_task") or request.task),
                 engine=delegated_engine,
                 cwd=str(cwd),
                 timeout=timeout,
-                use_aider=delegated_engine == "ra-aid",
+                use_aider=False,
             )
         except Exception:
             request = AgentTaskRequest(
                 task=request.task,
-                engine="ra-aid",
+                engine="aider",
                 cwd=str(cwd),
                 timeout=timeout,
-                use_aider=True,
+                use_aider=False,
             )
 
     engine, args = _build_agent_command(request)
@@ -1855,7 +1800,7 @@ async def run_agent_task(request: AgentTaskRequest):
 
 @app.post("/api/agent/task/stream")
 async def run_agent_task_stream(request: AgentTaskRequest):
-    """Run Lila Agent manager, RA.Aid, or aider and stream a live activity log."""
+    """Run Lila Agent manager or aider and stream a live activity log."""
     cwd = _resolve_execution_cwd(request.cwd)
     timeout = max(1, min(request.timeout, 3600))
 
@@ -1879,7 +1824,7 @@ async def run_agent_task_stream(request: AgentTaskRequest):
             })
             try:
                 decision = await _ask_hermes_manager(request.task, cwd)
-                delegated_engine = str(decision.get("tool", "ra-aid")).strip().lower()
+                delegated_engine = str(decision.get("tool", "aider")).strip().lower()
                 delegated_task = str(decision.get("delegated_task") or request.task)
                 rationale = str(decision.get("rationale") or "Delegating to the safest available tool.")
                 yield await emit({
@@ -1890,33 +1835,26 @@ async def run_agent_task_stream(request: AgentTaskRequest):
                     yield await emit({"type": "done", "result": _inspect_startup(cwd).model_dump()})
                     yield "[DONE]"
                     return
-                if delegated_engine == "ra-aid" and not _is_ra_aid_available()[0]:
-                    _, reason = _is_ra_aid_available()
-                    yield await emit({
-                        "type": "status",
-                        "message": f"RA.Aid is unavailable in this venv ({reason}), so Lila Agent is falling back to file-seeded aider.",
-                    })
-                    delegated_engine = "aider"
                 motor_request = AgentTaskRequest(
                     task=delegated_task,
                     engine=delegated_engine,
                     cwd=str(cwd),
                     timeout=timeout,
-                    use_aider=delegated_engine == "ra-aid",
+                    use_aider=False,
                     max_revisions=request.max_revisions,
                     steering_context=request.steering_context,
                 )
             except Exception as error:
                 yield await emit({
                     "type": "status",
-                    "message": f"Lila Agent manager failed ({error}); falling back to RA.Aid.",
+                    "message": f"Lila Agent manager failed ({error}); falling back to file-seeded aider.",
                 })
                 motor_request = AgentTaskRequest(
                     task=request.task,
-                    engine="ra-aid",
+                    engine="aider",
                     cwd=str(cwd),
                     timeout=timeout,
-                    use_aider=True,
+                    use_aider=False,
                     max_revisions=request.max_revisions,
                     steering_context=request.steering_context,
                 )

@@ -232,7 +232,7 @@ export class AiChatService {
     }
 
     /**
-     * Delegate a coding task to RA.Aid/aider through PSC's local agent wrapper.
+     * Delegate a coding task through PSC's local agent wrapper.
      */
     async runAgentTask(request: GemmaProtocol.AgentTaskRequest): Promise<GemmaProtocol.AgentTaskResponse> {
         const resp = await fetch(`${this._serverUrl}/api/agent/task`, {

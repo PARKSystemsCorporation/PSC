@@ -122,10 +122,10 @@ export namespace GemmaProtocol {
         timed_out: boolean;
     }
 
-    /** Lila Agent/RA.Aid/aider task request */
+    /** Lila Agent/aider task request */
     export interface AgentTaskRequest {
         task: string;
-        engine?: 'hermes' | 'ra-aid' | 'aider';
+        engine?: 'hermes' | 'aider';
         cwd?: string;
         timeout?: number;
         use_aider?: boolean;
@@ -134,7 +134,7 @@ export namespace GemmaProtocol {
         run_id?: string;
     }
 
-    /** RA.Aid/aider task response */
+    /** Local agent task response */
     export interface AgentTaskResponse {
         engine: string;
         command: string;
@@ -145,7 +145,7 @@ export namespace GemmaProtocol {
         timed_out: boolean;
     }
 
-    /** Live event emitted while RA.Aid/aider is running. */
+    /** Live event emitted while a local agent task is running. */
     export interface AgentTaskEvent {
         type: 'status' | 'log' | 'done' | 'error' | string;
         message?: string;

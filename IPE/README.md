@@ -6,7 +6,7 @@ The current agent stack is:
 
 - Ollama for local model serving
 - FastAPI in `llm-server/` for chat, completion, file tools, command tools, and agent delegation
-- RA.Aid for autonomous research/planning/tool use
+- Lila Agent for supervised local task routing
 - aider for direct code edits
 - `mcp/psc_agent_mcp.py` for MCP-compatible access to the same local tools
 
@@ -42,7 +42,7 @@ This starts:
 
 ## Agent Mode
 
-The chat extension defaults Agent mode on. Normal coding tasks are delegated to RA.Aid with aider enabled. If the user asks to use aider directly, the IDE calls aider one-shot mode. If the user asks to pull/update/sync from GitHub, the IDE asks for approval and runs:
+The chat extension defaults Agent mode on. Normal coding tasks run through supervised, file-seeded aider revisions. If the user asks to use aider directly, the IDE calls aider one-shot mode. If the user asks to pull/update/sync from GitHub, the IDE asks for approval and runs:
 
 ```bash
 git pull --ff-only
@@ -65,7 +65,6 @@ npm run mcp:agent
 It exposes:
 
 - `git_pull`
-- `ra_aid_task`
 - `aider_task`
 - `currency_sqlite_schema`
 - `currency_sqlite_read`
@@ -111,7 +110,7 @@ Before WSL/Canopy is ready, you can still launch two native Windows Lila Agent-m
 npm run agents:dual
 ```
 
-This opens Lila Agent-managed RA.Aid/aider motor sessions for `C:\vestra` and `C:\lila` in separate terminal tabs.
+This opens Lila Agent-managed aider motor sessions for `C:\vestra` and `C:\lila` in separate terminal tabs.
 
 ## Local Model Defaults
 
@@ -132,7 +131,7 @@ PERSONAPLEX_ENABLED=false
 PSC_TARGET_WORKSPACE=..
 ```
 
-RA.Aid and aider are installed via `llm-server/requirements.txt` into `llm-server/.venv`.
+aider is installed via `llm-server/requirements.txt` into `llm-server/.venv`.
 
 ## Logs
 
